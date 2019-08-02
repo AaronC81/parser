@@ -80,6 +80,21 @@ module Parser
       attr_accessor :emit_index
     end
 
+    class << self
+      ##
+      # AST compatibility attribute; causes a single non-mlhs
+      # block argument to be wrapped in s(:procarg0).
+      #
+      # If set to false (the default), block arguments `|a|` are emitted as
+      # `s(:args, s(:procarg0, :a))`
+      #
+      # If set to true, block arguments `|a|` are emitted as
+      # `s(:args, s(:procarg0, s(:arg, :a))`
+      #
+      # @return [Boolean]
+      attr_accessor :emit_arg_inside_procarg0
+    end
+
     @emit_index = false
 
     class << self
@@ -90,6 +105,7 @@ module Parser
         @emit_procarg0 = true
         @emit_encoding = true
         @emit_index = true
+        @emit_arg_inside_procarg0 = true
       end
     end
 
@@ -400,12 +416,12 @@ module Parser
 
     def range_inclusive(lhs, dot2_t, rhs)
       n(:irange, [ lhs, rhs ],
-        binary_op_map(lhs, dot2_t, rhs))
+        range_map(lhs, dot2_t, rhs))
     end
 
     def range_exclusive(lhs, dot3_t, rhs)
       n(:erange, [ lhs, rhs ],
-        binary_op_map(lhs, dot3_t, rhs))
+        range_map(lhs, dot3_t, rhs))
     end
 
     #
@@ -434,6 +450,11 @@ module Parser
 
     def cvar(token)
       n(:cvar, [ value(token).to_sym ],
+        variable_map(token))
+    end
+
+    def numparam(token)
+      n(:numparam, [ value(token).to_i ],
         variable_map(token))
     end
 
@@ -665,6 +686,10 @@ module Parser
         collection_map(begin_t, args, end_t))
     end
 
+    def numargs(max_numparam)
+      n(:numargs, [ max_numparam ], nil)
+    end
+
     def arg(name_t)
       n(:arg, [ value(name_t).to_sym ],
         variable_map(name_t))
@@ -719,7 +744,12 @@ module Parser
 
     def procarg0(arg)
       if self.class.emit_procarg0
-        arg.updated(:procarg0)
+        if arg.type == :arg && self.class.emit_arg_inside_procarg0
+          n(:procarg0, [ arg ],
+            Source::Map::Collection.new(nil, nil, arg.location.expression))
+        else
+          arg.updated(:procarg0)
+        end
       else
         arg
       end
@@ -837,15 +867,23 @@ module Parser
         diagnostic :error, :block_and_blockarg, nil, last_arg.loc.expression, [loc(begin_t)]
       end
 
+
+      if args.type == :numargs
+        block_type = :numblock
+        args = args.children[0]
+      else
+        block_type = :block
+      end
+
       if [:send, :csend, :index, :super, :zsuper, :lambda].include?(method_call.type)
-        n(:block, [ method_call, args, body ],
+        n(block_type, [ method_call, args, body ],
           block_map(method_call.loc.expression, begin_t, end_t))
       else
         # Code like "return foo 1 do end" is reduced in a weird sequence.
         # Here, method_call is actually (return).
         actual_send, = *method_call
         block =
-          n(:block, [ actual_send, args, body ],
+          n(block_type, [ actual_send, args, body ],
             block_map(actual_send.loc.expression, begin_t, end_t))
 
         n(method_call.type, [ block ],
@@ -963,6 +1001,11 @@ module Parser
             send_map(nil, nil, not_t, begin_t, [receiver], end_t))
         end
       end
+    end
+
+    def method_ref(receiver, dot_t, selector_t)
+      n(:meth_ref, [ receiver, value(selector_t).to_sym ],
+          send_map(receiver, dot_t, selector_t, nil, [], nil))
     end
 
     #
@@ -1212,23 +1255,37 @@ module Parser
         case this_arg.type
         when :arg, :optarg, :restarg, :blockarg,
              :kwarg, :kwoptarg, :kwrestarg,
-             :shadowarg, :procarg0
+             :shadowarg
 
-          this_name, = *this_arg
+          check_duplicate_arg(this_arg, map)
 
-          that_arg   = map[this_name]
-          that_name, = *that_arg
+        when :procarg0
 
-          if that_arg.nil?
-            map[this_name] = this_arg
-          elsif arg_name_collides?(this_name, that_name)
-            diagnostic :error, :duplicate_argument, nil,
-                       this_arg.loc.name, [ that_arg.loc.name ]
+          if this_arg.children[0].is_a?(Symbol)
+            # s(:procarg0, :a)
+            check_duplicate_arg(this_arg, map)
+          else
+            # s(:procarg0, s(:arg, :a), ...)
+            check_duplicate_args(this_arg.children, map)
           end
 
         when :mlhs
           check_duplicate_args(this_arg.children, map)
         end
+      end
+    end
+
+    def check_duplicate_arg(this_arg, map={})
+      this_name, = *this_arg
+
+      that_arg   = map[this_name]
+      that_name, = *that_arg
+
+      if that_arg.nil?
+        map[this_name] = this_arg
+      elsif arg_name_collides?(this_name, that_name)
+        diagnostic :error, :duplicate_argument, nil,
+                   this_arg.loc.name, [ that_arg.loc.name ]
       end
     end
 
@@ -1385,6 +1442,18 @@ module Parser
         expr_l = loc(op_t)
       else
         expr_l = loc(op_t).join(arg_e.loc.expression)
+      end
+
+      Source::Map::Operator.new(loc(op_t), expr_l)
+    end
+
+    def range_map(start_e, op_t, end_e)
+      if start_e && end_e
+        expr_l = join_exprs(start_e, end_e)
+      elsif start_e
+        expr_l = start_e.loc.expression.join(loc(op_t))
+      elsif end_e
+        expr_l = loc(op_t).join(end_e.loc.expression)
       end
 
       Source::Map::Operator.new(loc(op_t), expr_l)

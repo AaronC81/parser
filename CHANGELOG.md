@@ -1,8 +1,68 @@
 Changelog
 =========
 
-Not released (2018-04-12)
--------------------------
+v2.6.3.0 (2019-04-28)
+---------------------
+
+Features implemented:
+ * ruby27.y: Added beginless ranges support. (#570) (Ilya Bylich)
+
+v2.6.2.1 (2019-04-05)
+---------------------
+
+API modifications:
+ * Bump 2.4 branch to 2.4.6. (#569) (Ilya Bylich)
+ * Lexer should know about current parsing context. (#566) (Ilya Bylich)
+
+v2.6.2.0 (2019-03-21)
+---------------------
+
+API modifications:
+ * Bump ruby versions to 2.5.5 and 2.6.2. (#563) (Ilya Bylich)
+ * Bump Ruby version to 2.6.1. (#554) (Ilya Bylich)
+
+Features implemented:
+ * ruby27.y: dsym should be treated as string. (#560) (Ilya Bylich)
+ * ruby27.y: Refactored symbol rules. (#557) (Ilya Bylich)
+ * ruby27.y: Added method reference operator. (#556) (Ilya Bylich)
+ * ruby27.y: branch parser. (#546) (Ilya Bylich)
+
+v2.6.0.0 (2019-01-16)
+---------------------
+
+API modifications:
+ * 2.6.0 was released, unmark is as -dev. (#538) (Ilya Bylich)
+
+Bugs fixed:
+ * Fix parsing of "\\\n" escaped sequences in various literals. (#539) (Ilya Bylich)
+
+v2.5.3.0 (2018-10-29)
+---------------------
+
+Bugs fixed:
+ * lexer.rl: Fix parsing of 'm :key => m do; m() do end; end'. (#526) (Ilya Bylich)
+ * lexer.rl: Fix parsing of ambiguous 1re. (#523) (Ilya Bylich)
+
+v2.5.1.2 (2018-07-10)
+---------------------
+
+Bugs fixed:
+ * lexer.rl: Partially revert 5ba072d and properly handle 'm = -> *args do end'. (Ilya Bylich)
+
+v2.5.1.1 (2018-07-10)
+---------------------
+
+Features implemented:
+ * ruby26.y: Endless ranges support. (Ilya Bylich)
+
+Bugs fixed:
+ * lexer.rl: Fix parsing of 'm = -> *args do end'. (Ilya Bylich)
+ * AST::Processor: Properly recurse into "kwsplat" nodes (Nelson Elhage)
+ * ruby24, ruby25, ruby26: Fix cmdargs after command_args followed by tLBRACE_ARG. This commit tracks upstream commit ruby/ruby@f168dbd. (Ilya Bylich)
+ * lexer.rl: Fix parsing of `let (:a) { m do; end }`. (Ilya Bylich)
+
+v2.5.1.0 (2018-04-12)
+---------------------
 
 API modifications:
  * Parser::Current: bump latest 2.2 branch to 2.2.10. (Ilya Bylich)

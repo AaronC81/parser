@@ -39,7 +39,7 @@ module Parser
     CurrentRuby = Ruby22
 
   when /^2\.3\./
-    current_version = '2.3.7'
+    current_version = '2.3.8'
     if RUBY_VERSION != current_version
       warn_syntax_deviation 'parser/ruby23', current_version
     end
@@ -48,7 +48,7 @@ module Parser
     CurrentRuby = Ruby23
 
   when /^2\.4\./
-    current_version = '2.4.4'
+    current_version = '2.4.6'
     if RUBY_VERSION != current_version
       warn_syntax_deviation 'parser/ruby24', current_version
     end
@@ -57,7 +57,7 @@ module Parser
     CurrentRuby = Ruby24
 
   when /^2\.5\./
-    current_version = '2.5.1'
+    current_version = '2.5.5'
     if RUBY_VERSION != current_version
       warn_syntax_deviation 'parser/ruby25', current_version
     end
@@ -66,7 +66,7 @@ module Parser
     CurrentRuby = Ruby25
 
   when /^2\.6\./
-    current_version = '2.6.0-dev'
+    current_version = '2.6.3'
     if RUBY_VERSION != current_version
       warn_syntax_deviation 'parser/ruby26', current_version
     end
@@ -74,10 +74,19 @@ module Parser
     require 'parser/ruby26'
     CurrentRuby = Ruby26
 
+  when /^2\.7\./
+    current_version = '2.7.0-dev'
+    if RUBY_VERSION != current_version
+      warn_syntax_deviation 'parser/ruby27', current_version
+    end
+
+    require 'parser/ruby27'
+    CurrentRuby = Ruby27
+
   else # :nocov:
     # Keep this in sync with released Ruby.
-    warn_syntax_deviation 'parser/ruby25', '2.5.x'
-    require 'parser/ruby25'
-    CurrentRuby = Ruby25
+    warn_syntax_deviation 'parser/ruby26', '2.6.x'
+    require 'parser/ruby26'
+    CurrentRuby = Ruby26
   end
 end

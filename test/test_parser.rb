@@ -28,6 +28,7 @@ class TestParser < Minitest::Test
   SINCE_2_4 = SINCE_2_3 - %w(2.3)
   SINCE_2_5 = SINCE_2_4 - %w(2.4)
   SINCE_2_6 = SINCE_2_5 - %w(2.5)
+  SINCE_2_7 = SINCE_2_6 - %w(2.6)
 
   # Guidelines for test naming:
   #  * Test structure follows structure of AST_FORMAT.md.
@@ -831,6 +832,60 @@ class TestParser < Minitest::Test
       %q{1...2},
       %q{ ~~~ operator
         |~~~~~ expression})
+  end
+
+  def test_range_endless
+    assert_parses(
+      s(:irange,
+        s(:int, 1), nil),
+      %q{1..},
+      %q{~~~ expression
+        | ~~ operator},
+      SINCE_2_6)
+
+    assert_parses(
+      s(:erange,
+        s(:int, 1), nil),
+      %q{1...},
+      %q{~~~~ expression
+        | ~~~ operator},
+      SINCE_2_6)
+  end
+
+  def test_beginless_range_before_27
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT2' }],
+      %q{..42},
+      %q{^^ location},
+      ALL_VERSIONS - SINCE_2_7
+    )
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT3' }],
+      %q{...42},
+      %q{^^^ location},
+      ALL_VERSIONS - SINCE_2_7
+    )
+  end
+
+  def test_beginless_range
+    assert_parses(
+      s(:irange, nil,
+        s(:int, 100)),
+      %q{..100},
+      %q{~~~~~ expression
+        |~~ operator},
+      SINCE_2_7
+    )
+
+    assert_parses(
+      s(:erange, nil,
+        s(:int, 100)),
+      %q{...100},
+      %q{~~~~~~ expression
+        |~~~ operator},
+      SINCE_2_7
+    )
   end
 
   #
@@ -2402,7 +2457,7 @@ class TestParser < Minitest::Test
     # f_arg                                                      opt_f_block_arg
     # f_arg tCOMMA
     assert_parses_blockargs(
-      s(:args, s(:procarg0, :a)),
+      s(:args, s(:procarg0, s(:arg, :a))),
       %q{|a|},
       SINCE_1_9)
 
@@ -2643,6 +2698,39 @@ class TestParser < Minitest::Test
     )
   ensure
     Parser::Builders::Default.emit_procarg0 = true
+  end
+
+  def test_emit_arg_inside_procarg0_legacy
+    Parser::Builders::Default.emit_arg_inside_procarg0 = false
+    assert_parses_blockargs(
+      s(:args,
+        s(:procarg0, :a)),
+      %q{|a|},
+      SINCE_1_9)
+  ensure
+    Parser::Builders::Default.emit_arg_inside_procarg0 = true
+  end
+
+  def test_procarg0
+    assert_parses(
+      s(:block,
+        s(:send, nil, :m),
+        s(:args,
+          s(:procarg0, s(:arg, :foo))), nil),
+      %q{m { |foo| } },
+      %q{     ^^^ expression (args.procarg0)},
+      SINCE_1_9)
+
+    assert_parses(
+      s(:block,
+        s(:send, nil, :m),
+        s(:args,
+          s(:procarg0, s(:arg, :foo), s(:arg, :bar))), nil),
+      %q{m { |(foo, bar)| } },
+      %q{     ^ begin (args.procarg0)
+        |              ^ end (args.procarg0)
+        |     ^^^^^^^^^^ expression (args.procarg0)},
+      SINCE_1_9)
   end
 
   def test_block_kwarg_combinations
@@ -5620,7 +5708,7 @@ class TestParser < Minitest::Test
           s(:send,
             s(:int, 1), :tap),
           s(:args,
-            s(:procarg0, :n)),
+            s(:procarg0, s(:arg, :n))),
           s(:send, nil, :p,
             s(:lvar, :n))),
         s(:int, 0)),
@@ -6231,7 +6319,7 @@ class TestParser < Minitest::Test
         s(:send, nil, :a,
           s(:ivar, :@b)),
         s(:args,
-          s(:procarg0, :c)), nil),
+          s(:procarg0, s(:arg, :c))), nil),
       %q{a @b do |c|;end},
       %q{},
       SINCE_1_9)
@@ -6658,7 +6746,7 @@ class TestParser < Minitest::Test
       [:error, :unexpected_token, { :token => 'kRESCUE'}],
       %q{-> do rescue; end},
       %q{      ~~~~~~ location},
-      SINCE_1_9 - SINCE_2_5)
+      SINCE_1_9 - SINCE_2_6)
 
     assert_parses(
       s(:block,
@@ -6668,7 +6756,7 @@ class TestParser < Minitest::Test
           s(:resbody, nil, nil, nil), nil)),
       %q{-> do rescue; end},
       %q{      ~~~~~~ keyword (rescue.resbody)},
-      SINCE_2_5)
+      SINCE_2_6)
 
     assert_diagnoses(
       [:error, :unexpected_token, { :token => 'kRESCUE'}],
@@ -6964,5 +7052,553 @@ class TestParser < Minitest::Test
       %q{a ? b ! '': nil},
       %q{      ^ location},
       SINCE_2_2)
+  end
+
+  def test_lbrace_arg_after_command_args
+    assert_parses(
+      s(:block,
+        s(:send, nil, :let,
+          s(:begin,
+            s(:sym, :a))),
+        s(:args),
+        s(:block,
+          s(:send, nil, :m),
+          s(:args), nil)),
+      %q{let (:a) { m do; end }},
+      %q{},
+      ALL_VERSIONS)
+  end
+
+  def test_ruby_bug_14690
+    assert_parses(
+      s(:block,
+        s(:send, nil, :let,
+          s(:begin)),
+        s(:args),
+        s(:block,
+          s(:send, nil, :m,
+            s(:send, nil, :a)),
+          s(:args), nil)),
+      %q{let () { m(a) do; end }},
+      %q{},
+      SINCE_2_0)
+  end
+
+  def test_parser_bug_507
+    assert_parses(
+      s(:lvasgn, :m,
+        s(:block,
+          s(:lambda),
+          s(:args,
+            s(:restarg, :args)), nil)),
+      %q{m = -> *args do end},
+      %q{},
+      SINCE_1_9)
+  end
+
+  def test_parser_bug_518
+    assert_parses(
+      s(:class,
+        s(:const, nil, :A),
+        s(:const, nil, :B), nil),
+      "class A < B\nend",
+      %q{},
+      ALL_VERSIONS)
+  end
+
+  def test_parser_bug_525
+    assert_parses(
+      s(:block,
+        s(:send, nil, :m1,
+          s(:hash,
+            s(:pair,
+              s(:sym, :k),
+              s(:send, nil, :m2)))),
+        s(:args),
+        s(:block,
+          s(:send, nil, :m3),
+          s(:args), nil)),
+      'm1 :k => m2 do; m3() do end; end',
+      %q{},
+      ALL_VERSIONS)
+  end
+
+  def test_parser_slash_slash_n_escaping_in_literals
+    [
+      ["'",             "'",       s(:dstr, s(:str, "a\\\n"), s(:str, "b"))  ],
+      ["<<-'HERE'\n",   "\nHERE",  s(:dstr, s(:str, "a\\\n"), s(:str, "b\n"))],
+      ["%q{",           "}",       s(:dstr, s(:str, "a\\\n"), s(:str, "b"))  ],
+      ['"',             '"',       s(:str, "ab")                             ],
+      ["<<-\"HERE\"\n", "\nHERE",  s(:str, "ab\n")                           ],
+      ["%{",            "}",       s(:str, "ab")                             ],
+      ["%Q{",           "}",       s(:str, "ab")                             ],
+      ["%w{",           "}",       s(:array, s(:str, "a\nb"))                ],
+      ["%W{",           "}",       s(:array, s(:str, "a\nb"))                ],
+      ["%i{",           "}",       s(:array, s(:sym, :"a\nb"))               ],
+      ["%I{",           "}",       s(:array, s(:sym, :"a\nb"))               ],
+      [":'",            "'",       s(:dsym, s(:str, "a\\\n"), s(:str, "b"))  ],
+      ["%s{",           "}",       s(:dsym, s(:str, "a\\\n"), s(:str, "b"))  ],
+      [':"',            '"',       s(:sym, :ab)                              ],
+      ['/',             '/',       s(:regexp, s(:str, "ab"), s(:regopt))     ],
+      ['%r{',           '}',       s(:regexp, s(:str, "ab"), s(:regopt))     ],
+      ['%x{',           '}',       s(:xstr, s(:str, "ab"))                   ],
+      ['`',             '`',       s(:xstr, s(:str, "ab"))                   ],
+      ["<<-`HERE`\n",   "\nHERE",  s(:xstr, s(:str, "ab\n"))                 ],
+    ].each do |literal_s, literal_e, expected|
+      source = literal_s + "a\\\nb" + literal_e
+
+      assert_parses(
+        expected,
+        source,
+        %q{},
+        SINCE_2_0)
+    end
+  end
+
+  def test_meth_ref
+    assert_parses(
+      s(:meth_ref, s(:lvar, :foo), :bar),
+      %q{foo.:bar},
+      %q{   ^^ dot
+        |     ~~~ selector
+        |~~~~~~~~ expression},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:meth_ref, s(:lvar, :foo), :+@),
+      %q{foo.:+@},
+      %q{   ^^ dot
+        |     ~~ selector
+        |~~~~~~~ expression},
+      SINCE_2_7)
+  end
+
+  def test_meth_ref_unsupported_newlines
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tCOLON' }],
+      %Q{foo. :+},
+      %q{     ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tCOLON' }],
+      %Q{foo.: +},
+      %q{    ^ location},
+      SINCE_2_7)
+  end
+
+  def test_unterimated_heredoc_id__27
+    assert_diagnoses(
+      [:error, :unterminated_heredoc_id],
+      %Q{<<\"EOS\n\nEOS\n},
+      %q{^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unterminated_heredoc_id],
+      %Q{<<\"EOS\n\"\nEOS\n},
+      %q{^ location},
+      SINCE_2_7)
+
+    %W[\r\n \n].each do |nl|
+      assert_diagnoses(
+        [:error, :unterminated_heredoc_id],
+        %Q{<<\"\r\"#{nl}\r#{nl}},
+        %q{^ location},
+        SINCE_2_7)
+    end
+  end
+
+  def test_numbered_args_before_27
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{m { @1 }},
+      %q{    ^^ location},
+      ALL_VERSIONS - SINCE_2_7
+    )
+  end
+
+  def test_numbered_args_after_27
+    assert_parses(
+      s(:numblock,
+        s(:send, nil, :m),
+        15,
+        s(:send,
+          s(:numparam, 1), :+,
+          s(:numparam, 15))),
+      %q{m { @1 + @15 }},
+      %q{^^^^^^^^^^^^^^ expression
+        |    ^^ name (send/2.numparam/1)
+        |    ^^ expression (send/2.numparam/1)
+        |         ^^^ name (send/2.numparam/2)
+        |         ^^^ expression (send/2.numparam/2)},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:numblock,
+        s(:send, nil, :m),
+        15,
+        s(:send,
+          s(:numparam, 1), :+,
+          s(:numparam, 15))),
+      %q{m do @1 + @15 end},
+      %q{^^^^^^^^^^^^^^^^^ expression
+        |     ^^ name (send/2.numparam/1)
+        |     ^^ expression (send/2.numparam/1)
+        |          ^^^ name (send/2.numparam/2)
+        |          ^^^ expression (send/2.numparam/2)},
+      SINCE_2_7)
+
+    # Lambdas
+
+    assert_parses(
+      s(:numblock,
+        s(:lambda),
+        15,
+        s(:send,
+          s(:numparam, 1), :+,
+          s(:numparam, 15))),
+      %q{-> { @1 + @15}},
+      %q{^^^^^^^^^^^^^^ expression
+        |     ^^ name (send.numparam/1)
+        |     ^^ expression (send.numparam/1)
+        |          ^^^ name (send.numparam/2)
+        |          ^^^ expression (send.numparam/2)},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:numblock,
+        s(:lambda),
+        15,
+        s(:send,
+          s(:numparam, 1), :+,
+          s(:numparam, 15))),
+      %q{-> do @1 + @15 end},
+      %q{^^^^^^^^^^^^^^^^^^ expression
+        |      ^^ name (send.numparam/1)
+        |      ^^ expression (send.numparam/1)
+        |           ^^^ name (send.numparam/2)
+        |           ^^^ expression (send.numparam/2)},
+      SINCE_2_7)
+  end
+
+  def test_numbered_and_ordinary_parameters
+    # Blocks
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m { || @1 } },
+      %q{       ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m { |a| @1 } },
+      %q{        ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m do || @1 end },
+      %q{        ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m do |a, b| @1 end },
+      %q{            ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m { |x = @1| }},
+      %q{         ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{m { |x: @1| }},
+      %q{        ^^ location},
+      SINCE_2_7)
+
+    # Lambdas
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->() { @1 } },
+      %q{       ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->(a) { @1 } },
+      %q{        ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->() do @1 end },
+      %q{        ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->(a, b) do @1 end},
+      %q{            ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->(x=@1) {}},
+      %q{     ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{->(x: @1) {}},
+      %q{      ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      %q{proc {|;a| @1}},
+      %q{           ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ordinary_param_defined],
+      "proc {|\n| @1}",
+      %q{          ^^ location},
+      SINCE_2_7)
+  end
+
+  def test_numparam_outside_block
+    assert_diagnoses(
+      [:error, :numparam_outside_block],
+      %q{class A; @1; end},
+      %q{         ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :numparam_outside_block],
+      %q{module A; @1; end},
+      %q{          ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :numparam_outside_block],
+      %q{class << foo; @1; end},
+      %q{              ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :numparam_outside_block],
+      %q{def self.m; @1; end},
+      %q{            ^^ location},
+      SINCE_2_7)
+  end
+
+  def test_ruby_bug_15789
+    assert_parses(
+      s(:send, nil, :m,
+        s(:block,
+          s(:lambda),
+          s(:args,
+            s(:optarg, :a,
+              s(:numblock,
+                s(:lambda), 1,
+                s(:numparam, 1)))),
+          s(:lvar, :a))),
+      %q{m ->(a = ->{@1}) {a}},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:send, nil, :m,
+        s(:block,
+          s(:lambda),
+          s(:args,
+            s(:kwoptarg, :a,
+              s(:numblock,
+                s(:lambda), 1,
+                s(:numparam, 1)))),
+          s(:lvar, :a))),
+      %q{m ->(a: ->{@1}) {a}},
+      %q{},
+      SINCE_2_7)
+  end
+
+  def test_ruby_bug_15839
+    assert_diagnoses(
+      [:error, :invalid_encoding],
+      %q{# encoding: cp932
+        <<-TEXT
+        \xe9\x9d\u1234
+        TEXT
+      })
+
+    assert_diagnoses(
+      [:error, :invalid_encoding],
+      %q{
+        # encoding: cp932
+        <<-TEXT
+        \xe9\x9d
+        \u1234
+        TEXT
+      })
+
+    assert_diagnoses(
+      [:error, :invalid_encoding],
+      %q{
+        # encoding: cp932
+        <<-TEXT
+        \u1234\xe9\x9d
+        TEXT
+      })
+
+    assert_diagnoses(
+      [:error, :invalid_encoding],
+      %q{
+        # encoding: cp932
+        <<-TEXT
+        \u1234
+        \xe9\x9d
+        TEXT
+      })
+  end
+
+  def test_numparam_as_symbols
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@' }],
+      %q{:@},
+      %q{ ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{:@1},
+      %q{ ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@' }],
+      %q{:@@},
+      %q{ ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{:@@1},
+      %q{ ^^^ location},
+      SINCE_2_7)
+  end
+
+  def test_csend_inside_lhs_of_masgn__since_27
+    assert_diagnoses(
+      [:error, :csend_in_lhs_of_masgn],
+      %q{*a&.x = 0},
+      %q{  ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :csend_in_lhs_of_masgn],
+      %q{a&.x, = 0},
+      %q{ ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :csend_in_lhs_of_masgn],
+      %q{*a&.A = 0},
+      %q{  ^^ location},
+      SINCE_2_7)
+  end
+
+  def test_pipeline_operator__27
+    assert_parses(
+      s(:send,
+        s(:lvar, :foo), :bar),
+      %q{foo |> bar},
+      %q{    ~~ dot
+        |       ~~~ selector
+        |~~~~~~~~~~ expression},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:send,
+        s(:lvar, :foo), :bar,
+        s(:int, 1)),
+      %q{foo |> bar(1)},
+      %q{    ~~ dot
+        |       ~~~ selector
+        |          ~ begin
+        |            ~ end
+        |~~~~~~~~~~~~~ expression},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:block,
+        s(:send,
+          s(:lvar, :foo), :bar),
+        s(:args),
+        s(:int, 1)),
+      %q{foo |> bar { 1 }},
+      %q{    ~~ dot (send)},
+      SINCE_2_7
+    )
+
+    assert_parses(
+      s(:send,
+        s(:lvar, :foo), :bar,
+        s(:int, 1)),
+      %q{foo |> bar 1},
+      %q{    ~~ dot},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:block,
+        s(:send,
+          s(:lvar, :foo), :bar,
+          s(:int, 1)),
+        s(:args),
+        s(:int, 2)),
+      %q{foo |> bar 1 do 2 end},
+      %q{},
+      SINCE_2_7)
+  end
+
+  def test_pipeline_operator_before_27
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tGT' }],
+      %q{a |> b},
+      %q{   ^ location},
+      ALL_VERSIONS - SINCE_2_7)
+  end
+
+  def test_pipeline_operator_newline
+    assert_parses(
+      s(:send,
+        s(:lvar, :foo), :bar),
+      %q{foo!|> bar}.gsub('!', "\n"),
+      %q{    ~~ dot
+        |       ~~~ selector
+        |~~~~~~~~~~ expression},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:send,
+        s(:lvar, :foo), :bar),
+      %q{foo |>! bar}.gsub('!', "\n"),
+      %q{    ~~ dot
+        |        ~~~ selector
+        |~~~~~~~~~~~ expression},
+      SINCE_2_7)
+  end
+
+  def test_pipeline_operator_operation_before_pipe2
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tMINUS' }],
+      %q{a |> -b},
+      %q{     ^ location},
+      SINCE_2_7)
   end
 end

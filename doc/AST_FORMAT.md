@@ -102,10 +102,13 @@ Format:
 Format:
 
 ~~~
-(dstr (str "foo") (lvar bar) (str "baz"))
+(dstr (str "foo") (begin (lvar bar)) (str "baz"))
 '"foo#{bar}baz"'
  ^ begin      ^ end
  ~~~~~~~~~~~~~~ expression
+     ^^ begin (begin)
+          ^ end (begin)
+     ^^^^^^ expression (begin)
 ~~~
 
 #### Here document
@@ -320,6 +323,39 @@ Format:
 "1...2"
   ~~~ operator
  ~~~~~ expression
+~~~
+
+
+### Endless (2.6)
+
+Format:
+
+~~~
+(irange (int 1) nil)
+"1.."
+  ~~ operator
+ ~~~ expression
+
+(erange (int 1) nil)
+"1..."
+  ~~~ operator
+ ~~~~ expression
+~~~
+
+### Beginless (2.7)
+
+Format:
+
+~~~
+(irange nil (int 1))
+"..1"
+ ~~ operator
+ ~~~ expression
+
+(erange nil (int 1))
+"...1"
+ ~~~ operator
+ ~~~~ expression
 ~~~
 
 ## Access
@@ -564,6 +600,18 @@ Format:
        ~~~ selector
            ^ operator
  ~~~~~~~~~~~~~ expression
+~~~
+
+### Method reference operator
+
+Format:
+
+~~~
+(meth-ref (self) :foo)
+"self.:foo"
+     ^^ dot
+       ^^^ selector
+ ^^^^^^^^^ expression
 ~~~
 
 ### Multiple assignment
@@ -888,10 +936,15 @@ the sole argument (e.g. `|foo,|`).
 Format:
 
 ~~~
-(procarg0 :foo)
+(procarg0 (arg :foo))
 "|foo|"
   ~~~ expression
-  ~~~ name
+
+(procarg0 (arg :foo) (arg :bar))
+"|(foo, bar)|"
+  ~ begin
+           ~ end
+  ~~~~~~~~~~ expression
 ~~~
 
 ### Expression arguments
@@ -1036,6 +1089,40 @@ However, the following code results in a parse error:
 
 ~~~
 def f(*a: b); end
+~~~
+
+## Numbered parameters
+
+### Block with numbered parameters
+
+Ruby 2.7 introduced a feature called "numbered parameters".
+Numbered and ordinal parameters are mutually exclusive, so if the block
+has only numbered parameters it also has a different AST node.
+
+Note that the second child represents a total number of numbered parameters.
+
+Format:
+
+~~~
+s(:numblock,
+  s(:send, nil, :proc), 3,
+  s(:send,
+    s(:numparam, 1), :+,
+    s(:numparam, 3)))
+"proc { @1 + @3 }"
+      ~ begin   ~ end
+ ~~~~~~~~~~~~~~~~ expression
+~~~
+
+### Numbered parameter
+
+Format:
+
+~~~
+(numparam 10)
+"@10"
+ ~~~ name
+ ~~~ expression
 ~~~
 
 ## Send
@@ -1293,8 +1380,8 @@ Format:
  ~~~~~~ keyword
              ~~~~ begin
                           ~~~~ else
-                                     ~~~ end
- ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ expression
+                                         ~~~ end
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ expression
 
 "unless cond; iftrue; else; iffalse; end"
  ~~~~~~ keyword

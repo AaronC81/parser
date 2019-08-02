@@ -162,6 +162,24 @@ class TestLexer < Minitest::Test
     refute_escape 'u{123 f0'
   end
 
+  def test_read_escape_whitespaces__27
+    setup_lexer 27
+
+    [ *(0..8), *(14..31) ].each do |code|
+      @lex.reset
+      refute_scanned "\"\\C-" + code.chr + "\""
+
+      @lex.reset
+      refute_scanned "\"\\M-" + code.chr + "\""
+
+      @lex.reset
+      refute_scanned "\"\\C-\\M-" + code.chr + "\""
+
+      @lex.reset
+      refute_scanned "\"\\M-\\C-" + code.chr + "\""
+    end
+  end
+
   def test_ambiguous_uminus
     assert_scanned("m -3",
                    :tIDENTIFIER, "m", [0, 1],
@@ -3532,6 +3550,110 @@ class TestLexer < Minitest::Test
                    :tSTRING_CONTENT, "\a\b\e\f\r\t\v\n", [5, 14],
                    :tSTRING_END,     'E',                [14, 15],
                    :tNL,             nil,                [4, 5])
+  end
+
+  def test_ambiguous_integer_re
+    assert_scanned('1re',
+                   :tINTEGER, 1, [0, 1],
+                   :tIDENTIFIER, 're', [1, 3])
+  end
+
+  def test_meth_ref
+    assert_scanned('foo.:bar',
+                  :tIDENTIFIER, 'foo', [0, 3],
+                  :tMETHREF,   '.:',   [3, 5],
+                  :tIDENTIFIER, 'bar', [5, 8])
+
+    assert_scanned('foo .:bar',
+                   :tIDENTIFIER, 'foo', [0, 3],
+                   :tMETHREF,   '.:',   [4, 6],
+                   :tIDENTIFIER, 'bar', [6, 9])
+  end
+
+  def test_meth_ref_unary_op
+    assert_scanned('foo.:+',
+                  :tIDENTIFIER, 'foo', [0, 3],
+                  :tMETHREF,    '.:',  [3, 5],
+                  :tPLUS,       '+',   [5, 6])
+
+    assert_scanned('foo.:-@',
+                  :tIDENTIFIER, 'foo', [0, 3],
+                  :tMETHREF,    '.:',  [3, 5],
+                  :tUMINUS,     '-@',  [5, 7])
+  end
+
+  def test_meth_ref_unsupported_newlines
+    # MRI emits exactly the same sequence of tokens,
+    # the error happens later in the parser
+
+    assert_scanned('foo. :+',
+                  :tIDENTIFIER, 'foo', [0, 3],
+                  :tDOT,        '.',   [3, 4],
+                  :tCOLON,      ':',   [5, 6],
+                  :tUPLUS,       '+',  [6, 7])
+
+    assert_scanned('foo.: +',
+                  :tIDENTIFIER, 'foo', [0, 3],
+                  :tDOT,        '.',   [3, 4],
+                  :tCOLON,      ':',   [4, 5],
+                  :tPLUS,       '+',   [6, 7])
+  end
+
+  def lex_numbered_parameter(input)
+    @lex.max_numparam_stack.push
+
+    @lex.context = Parser::Context.new
+    @lex.context.push(:block)
+
+    source_buffer = Parser::Source::Buffer.new('(assert_lex_numbered_parameter)')
+    source_buffer.source = input
+
+    @lex.source_buffer = source_buffer
+
+    @lex.advance
+  end
+
+  def assert_scanned_numbered_parameter(input)
+    lex_token, (lex_value, lex_range) = lex_numbered_parameter(input)
+
+    assert_equal(lex_token, :tNUMPARAM)
+    assert_equal(lex_value, input.tr('@', ''))
+    assert_equal(lex_range.begin_pos, 0)
+    assert_equal(lex_range.end_pos, input.length)
+  end
+
+  def refute_scanned_numbered_parameter(input, message = nil)
+    err = assert_raises Parser::SyntaxError do
+      lex_token, (lex_value, lex_range) = lex_numbered_parameter(input)
+    end
+
+    if message
+      assert_equal(err.message, Parser::MESSAGES[message])
+
+      assert_equal(err.diagnostic.location.begin_pos, 0)
+      assert_equal(err.diagnostic.location.end_pos, input.length)
+    end
+  end
+
+  def test_numbered_args_before_27
+    setup_lexer(26)
+    refute_scanned_numbered_parameter('@1')
+  end
+
+  def test_numbered_args_27
+    setup_lexer(27)
+    assert_scanned_numbered_parameter('@1')
+    assert_equal(@lex.max_numparam, 1)
+
+    setup_lexer(27)
+    assert_scanned_numbered_parameter('@100')
+    assert_equal(@lex.max_numparam, 100)
+
+    setup_lexer(27)
+    refute_scanned_numbered_parameter('@101', :too_large_numparam)
+
+    setup_lexer(27)
+    refute_scanned_numbered_parameter('@01', :leading_zero_in_numparam)
   end
 
 end

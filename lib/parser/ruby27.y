@@ -1,4 +1,4 @@
-class Parser::Ruby26
+class Parser::Ruby27
 
 token kCLASS kMODULE kDEF kUNDEF kBEGIN kRESCUE kENSURE kEND kIF kUNLESS
       kTHEN kELSIF kELSE kCASE kWHEN kWHILE kUNTIL kFOR kBREAK kNEXT
@@ -17,7 +17,8 @@ token kCLASS kMODULE kDEF kUNDEF kBEGIN kRESCUE kENSURE kEND kIF kUNLESS
       tWORDS_BEG tQWORDS_BEG tSYMBOLS_BEG tQSYMBOLS_BEG tSTRING_DBEG
       tSTRING_DVAR tSTRING_END tSTRING_DEND tSTRING tSYMBOL
       tNL tEH tCOLON tCOMMA tSPACE tSEMI tLAMBDA tLAMBEG tCHARACTER
-      tRATIONAL tIMAGINARY tLABEL_END tANDDOT
+      tRATIONAL tIMAGINARY tLABEL_END tANDDOT tMETHREF tBDOT2 tBDOT3 tNUMPARAM
+      tPIPE2
 
 prechigh
   right    tBANG tTILDE tUPLUS
@@ -32,10 +33,11 @@ prechigh
   nonassoc tCMP tEQ tEQQ tNEQ tMATCH tNMATCH
   left     tANDOP
   left     tOROP
-  nonassoc tDOT2 tDOT3
+  nonassoc tDOT2 tDOT3 tBDOT2 tBDOT3
   right    tEH tCOLON
   left     kRESCUE_MOD
   right    tEQL tOP_ASGN
+  left     tPIPE2
   nonassoc kDEFINED
   right    kNOT
   left     kOR kAND
@@ -275,6 +277,38 @@ rule
                       result = @builder.not_op(val[0], nil, val[1], nil)
                     }
                 | arg
+                | pipeline
+
+        pipeline: expr tPIPE2 operation opt_paren_args
+                  {
+                    lparen_t, args, rparen_t = val[3]
+                    result      = @builder.call_method(val[0], val[1], val[2],
+                                    lparen_t, args, rparen_t)
+                  }
+                | expr tPIPE2 operation opt_paren_args brace_block
+                  {
+                    lparen_t, args, rparen_t = val[3]
+                    method_call = @builder.call_method(val[0], val[1], val[2],
+                                    lparen_t, args, rparen_t)
+
+                    begin_t, args, body, end_t = val[4]
+                    result      = @builder.block(method_call,
+                                    begin_t, args, body, end_t)
+                  }
+                | expr tPIPE2 operation command_args
+                  {
+                    result = @builder.call_method(val[0], val[1], val[2],
+                                  nil, val[3], nil)
+                  }
+                | expr tPIPE2 operation command_args do_block
+                  {
+                    method_call = @builder.call_method(val[0], val[1], val[2],
+                                      nil, val[3], nil)
+
+                    begin_t, args, body, end_t = val[4]
+                    result      = @builder.block(method_call,
+                                    begin_t, args, body, end_t)
+                  }
 
       expr_value: expr
 
@@ -480,6 +514,10 @@ rule
                     }
                 | primary_value call_op tIDENTIFIER
                     {
+                      if (val[1][0] == :anddot)
+                        diagnostic :error, :csend_in_lhs_of_masgn, nil, val[1]
+                      end
+
                       result = @builder.attr_asgn(val[0], val[1], val[2])
                     }
                 | primary_value tCOLON2 tIDENTIFIER
@@ -488,6 +526,10 @@ rule
                     }
                 | primary_value call_op tCONSTANT
                     {
+                      if (val[1][0] == :anddot)
+                        diagnostic :error, :csend_in_lhs_of_masgn, nil, val[1]
+                      end
+
                       result = @builder.attr_asgn(val[0], val[1], val[2])
                     }
                 | primary_value tCOLON2 tCONSTANT
@@ -567,14 +609,11 @@ rule
                 | op
                 | reswords
 
-            fsym: fname
+           fitem: fname
                     {
                       result = @builder.symbol(val[0])
                     }
                 | symbol
-
-           fitem: fsym
-                | dsym
 
       undef_list: fitem
                     {
@@ -672,6 +711,14 @@ rule
                 | arg tDOT3
                     {
                       result = @builder.range_exclusive(val[0], val[1], nil)
+                    }
+                | tBDOT2 arg
+                    {
+                      result = @builder.range_inclusive(nil, val[0], val[1])
+                    }
+                | tBDOT3 arg
+                    {
+                      result = @builder.range_exclusive(nil, val[0], val[1])
                     }
                 | arg tPLUS arg
                     {
@@ -1226,6 +1273,10 @@ rule
                     {
                       result = @builder.keyword_cmd(:retry, val[0])
                     }
+                | primary_value tMETHREF operation2
+                    {
+                      result = @builder.method_ref(val[0], val[1], val[2])
+                    }
 
    primary_value: primary
 
@@ -1285,45 +1336,33 @@ rule
                     }
 
          f_margs: f_marg_list
-                | f_marg_list tCOMMA tSTAR f_norm_arg
+                | f_marg_list tCOMMA f_rest_marg
                     {
                       result = val[0].
-                                  push(@builder.restarg(val[2], val[3]))
+                                  push(val[2])
                     }
-                | f_marg_list tCOMMA tSTAR f_norm_arg tCOMMA f_marg_list
+                | f_marg_list tCOMMA f_rest_marg tCOMMA f_marg_list
                     {
                       result = val[0].
-                                  push(@builder.restarg(val[2], val[3])).
-                                  concat(val[5])
-                    }
-                | f_marg_list tCOMMA tSTAR
-                    {
-                      result = val[0].
-                                  push(@builder.restarg(val[2]))
-                    }
-                | f_marg_list tCOMMA tSTAR            tCOMMA f_marg_list
-                    {
-                      result = val[0].
-                                  push(@builder.restarg(val[2])).
+                                  push(val[2]).
                                   concat(val[4])
                     }
-                |                    tSTAR f_norm_arg
+                |                    f_rest_marg
                     {
-                      result = [ @builder.restarg(val[0], val[1]) ]
+                      result = [ val[0] ]
                     }
-                |                    tSTAR f_norm_arg tCOMMA f_marg_list
+                |                    f_rest_marg tCOMMA f_marg_list
                     {
-                      result = [ @builder.restarg(val[0], val[1]),
-                                 *val[3] ]
+                      result = [ val[0], *val[2] ]
                     }
-                |                    tSTAR
+
+     f_rest_marg: tSTAR f_norm_arg
                     {
-                      result = [ @builder.restarg(val[0]) ]
+                      result = @builder.restarg(val[0], val[1])
                     }
-                |                    tSTAR tCOMMA f_marg_list
+                | tSTAR
                     {
-                      result = [ @builder.restarg(val[0]),
-                                 *val[2] ]
+                      result = @builder.restarg(val[0])
                     }
 
  block_args_tail: f_block_kwarg tCOMMA f_kwrest opt_f_block_arg
@@ -1451,14 +1490,17 @@ opt_block_args_tail:
 
  block_param_def: tPIPE opt_bv_decl tPIPE
                     {
+                      @lexer.max_numparam_stack.cant_have_numparams!
                       result = @builder.args(val[0], val[1], val[2])
                     }
                 | tOROP
                     {
+                      @lexer.max_numparam_stack.cant_have_numparams!
                       result = @builder.args(val[0], [], val[0])
                     }
                 | tPIPE block_param opt_bv_decl tPIPE
                     {
+                      @lexer.max_numparam_stack.cant_have_numparams!
                       result = @builder.args(val[0], val[1].concat(val[2]), val[3])
                     }
 
@@ -1489,26 +1531,34 @@ opt_block_args_tail:
 
           lambda:   {
                       @static_env.extend_dynamic
+                      @lexer.max_numparam_stack.push
+                      @context.push(:lambda)
                     }
                   f_larglist
                     {
+                      @context.pop
                       @lexer.cmdarg.push(false)
                     }
                   lambda_body
                     {
-                      @lexer.cmdarg.pop
+                      args = @lexer.max_numparam > 0 ? @builder.numargs(@lexer.max_numparam) : val[1]
+                      result = [ args, val[3] ]
 
-                      result = [ val[1], val[3] ]
-
+                      @lexer.max_numparam_stack.pop
                       @static_env.unextend
+                      @lexer.cmdarg.pop
                     }
 
      f_larglist: tLPAREN2 f_args opt_bv_decl tRPAREN
                     {
+                      @lexer.max_numparam_stack.cant_have_numparams!
                       result = @builder.args(val[0], val[1].concat(val[2]), val[3])
                     }
                 | f_args
                     {
+                      if val[0].any?
+                        @lexer.max_numparam_stack.cant_have_numparams!
+                      end
                       result = @builder.args(nil, val[0], nil)
                     }
 
@@ -1643,24 +1693,30 @@ opt_block_args_tail:
 
       brace_body:   {
                       @static_env.extend_dynamic
+                      @lexer.max_numparam_stack.push
                     }
                     opt_block_param compstmt
                     {
-                      result = [ val[1], val[2] ]
+                      args = @lexer.max_numparam > 0 ? @builder.numargs(@lexer.max_numparam) : val[1]
+                      result = [ args, val[2] ]
 
+                      @lexer.max_numparam_stack.pop
                       @static_env.unextend
                     }
 
          do_body:   {
                       @static_env.extend_dynamic
+                      @lexer.max_numparam_stack.push
                     }
                     {
                       @lexer.cmdarg.push(false)
                     }
                     opt_block_param bodystmt
                     {
-                      result = [ val[2], val[3] ]
+                      args = @lexer.max_numparam > 0 ? @builder.numargs(@lexer.max_numparam) : val[2]
+                      result = [ args, val[3] ]
 
+                      @lexer.max_numparam_stack.pop
                       @static_env.unextend
                       @lexer.cmdarg.pop
                     }
@@ -1716,7 +1772,6 @@ opt_block_args_tail:
 
          literal: numeric
                 | symbol
-                | dsym
 
          strings: string
                     {
@@ -1884,10 +1939,16 @@ regexp_contents: # nothing
                     {
                       result = @builder.cvar(val[0])
                     }
+                | tNUMPARAM
+                    {
+                      result = @builder.numparam(val[0])
+                    }
                 | backref
 
+          symbol: ssym
+                | dsym
 
-          symbol: tSYMBOL
+            ssym: tSYMBOL
                     {
                       @lexer.state = :expr_end
                       result = @builder.symbol(val[0])
@@ -1953,6 +2014,10 @@ regexp_contents: # nothing
                 | tCVAR
                     {
                       result = @builder.cvar(val[0])
+                    }
+                | tNUMPARAM
+                    {
+                      result = @builder.numparam(val[0])
                     }
 
 keyword_variable: kNIL
@@ -2178,6 +2243,8 @@ keyword_variable: kNIL
                     {
                       @static_env.declare val[0][0]
 
+                      @lexer.max_numparam_stack.cant_have_numparams!
+
                       result = val[0]
                     }
 
@@ -2209,6 +2276,8 @@ keyword_variable: kNIL
                       check_kwarg_name(val[0])
 
                       @static_env.declare val[0][0]
+
+                      @lexer.max_numparam_stack.cant_have_numparams!
 
                       result = val[0]
                     }
@@ -2405,7 +2474,7 @@ require 'parser'
 ---- inner
 
   def version
-    26
+    27
   end
 
   def default_encoding
