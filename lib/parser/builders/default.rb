@@ -658,8 +658,10 @@ module Parser
     #
 
     def args(begin_t, args, end_t, check_args=true)
+      # Due to the grammar changes made, args is now an array of tuples like:
+      #  [arg, type_const]
       args = check_duplicate_args(args) if check_args
-      n(:args, args,
+      n(:args, args.map { |(a, t)| n(:typed_arg, [a, t], nil) },
         collection_map(begin_t, args, end_t))
     end
 
@@ -1206,7 +1208,7 @@ module Parser
     end
 
     def check_duplicate_args(args, map={})
-      args.each do |this_arg|
+      args.each do |(this_arg, _)|
         case this_arg.type
         when :arg, :optarg, :restarg, :blockarg,
              :kwarg, :kwoptarg, :kwrestarg,

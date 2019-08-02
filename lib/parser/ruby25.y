@@ -2174,13 +2174,13 @@ keyword_variable: kNIL
                       result = @builder.multi_lhs(val[0], val[1], val[2])
                     }
 
-           f_arg: f_arg_item
+           f_arg: f_arg_item tDIVIDE expr
                     {
-                      result = [ val[0] ]
+                      result = [ [val[0], val[2]] ]
                     }
-                | f_arg tCOMMA f_arg_item
+                | f_arg tCOMMA f_arg_item tDIVIDE expr
                     {
-                      result = val[0] << val[2]
+                      result = val[0] << [ val[2], val[4] ]
                     }
 
          f_label: tLABEL
