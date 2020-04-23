@@ -29,6 +29,7 @@ class TestParser < Minitest::Test
   SINCE_2_5 = SINCE_2_4 - %w(2.4)
   SINCE_2_6 = SINCE_2_5 - %w(2.5)
   SINCE_2_7 = SINCE_2_6 - %w(2.6)
+  SINCE_2_8 = SINCE_2_7 - %w(2.7)
 
   # Guidelines for test naming:
   #  * Test structure follows structure of AST_FORMAT.md.
@@ -324,7 +325,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :p,
         s(:dstr,
-          s(:str, "x\n"),
+          s(:str, "\tx\n"),
           s(:str, "y\n"))),
       %Q{p <<~E\n\tx\n    y\nE},
       %q{},
@@ -428,6 +429,14 @@ class TestParser < Minitest::Test
             s(:str, "  y")),
           s(:str, "\n"))),
       %Q{p <<~"E"\n    x\n  \#{"  y"}\nE},
+      %q{},
+      SINCE_2_3)
+  end
+
+  def test_parser_bug_640
+    assert_parses(
+      s(:str, "bazqux\n"),
+      %Q{<<~FOO\n  baz\\\n  qux\nFOO},
       %q{},
       SINCE_2_3)
   end
@@ -2095,6 +2104,37 @@ class TestParser < Minitest::Test
       SINCE_2_0)
   end
 
+  def test_kwnilarg
+    assert_parses(
+      s(:def, :f,
+        s(:args, s(:kwnilarg)),
+        nil),
+      %q{def f(**nil); end},
+      %q{      ~~~~~ expression (args.kwnilarg)
+        |        ~~~ name (args.kwnilarg)},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:block,
+        s(:send, nil, :m),
+        s(:args,
+          s(:kwnilarg)), nil),
+      %q{m { |**nil| }},
+      %q{     ~~~~~ expression (args.kwnilarg)
+        |       ~~~ name (args.kwnilarg)},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:block,
+        s(:lambda),
+        s(:args,
+          s(:kwnilarg)), nil),
+      %q{->(**nil) {}},
+      %q{   ~~~~~ expression (args.kwnilarg)
+        |     ~~~ name (args.kwnilarg)},
+      SINCE_2_7)
+  end
+
   def test_blockarg
     assert_parses(
       s(:def, :f,
@@ -2137,7 +2177,7 @@ class TestParser < Minitest::Test
         s(:lvar, :var)),
       %q{def f(var = defined?(var)) var end},
       %q{},
-      SINCE_2_1)
+      SINCE_2_7 - SINCE_2_1)
 
     assert_parses(
       s(:def, :f,
@@ -2145,7 +2185,7 @@ class TestParser < Minitest::Test
         s(:lvar, :var)),
       %q{def f(var: defined?(var)) var end},
       %q{},
-      SINCE_2_1)
+      SINCE_2_7 - SINCE_2_1)
 
     assert_parses(
       s(:block,
@@ -2446,7 +2486,7 @@ class TestParser < Minitest::Test
       %Q{|;\na\n|},
       SINCE_2_0)
 
-    # tOROP
+    # tOROP before 2.7 / tPIPE+tPIPE after
     assert_parses_blockargs(
       s(:args),
       %q{||})
@@ -5063,6 +5103,12 @@ class TestParser < Minitest::Test
       %q{begin; 1; else; 2; end},
       %q{          ~~~~ location},
       SINCE_2_6)
+
+    assert_diagnoses(
+      [:error, :useless_else],
+      %q{begin; 1; else; end},
+      %q{          ~~~~ location},
+      SINCE_2_6)
   end
 
   def test_ensure
@@ -5147,6 +5193,26 @@ class TestParser < Minitest::Test
         |           ~~~~~~~~~~ expression (rescue.resbody)
         |      ~~~~~~~~~~~~~~~ expression (rescue)
         |~~~~~~~~~~~~~~~~~~~~~ expression})
+  end
+
+  def test_rescue_mod_masgn
+    assert_parses(
+      s(:masgn,
+        s(:mlhs,
+          s(:lvasgn, :foo),
+          s(:lvasgn, :bar)),
+        s(:rescue,
+          s(:send, nil, :meth),
+          s(:resbody, nil, nil,
+            s(:array,
+              s(:int, 1),
+              s(:int, 2))), nil)),
+      %q{foo, bar = meth rescue [1, 2]},
+      %q{                ~~~~~~ keyword (rescue.resbody)
+        |                ~~~~~~~~~~~~~ expression (rescue.resbody)
+        |           ~~~~~~~~~~~~~~~~~~ expression (rescue)
+        |~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ expression},
+      SINCE_2_7)
   end
 
   def test_rescue_mod_op_assign
@@ -5617,7 +5683,9 @@ class TestParser < Minitest::Test
       s(:def, :foo, s(:args),
         s(:begin,
           s(:begin, nil))),
-      %q{def foo; else; end})
+      %q{def foo; else; end},
+      %q{},
+      ALL_VERSIONS - SINCE_2_6)
   end
 
   def test_bug_heredoc_do
@@ -7155,38 +7223,6 @@ class TestParser < Minitest::Test
     end
   end
 
-  def test_meth_ref
-    assert_parses(
-      s(:meth_ref, s(:lvar, :foo), :bar),
-      %q{foo.:bar},
-      %q{   ^^ dot
-        |     ~~~ selector
-        |~~~~~~~~ expression},
-      SINCE_2_7)
-
-    assert_parses(
-      s(:meth_ref, s(:lvar, :foo), :+@),
-      %q{foo.:+@},
-      %q{   ^^ dot
-        |     ~~ selector
-        |~~~~~~~ expression},
-      SINCE_2_7)
-  end
-
-  def test_meth_ref_unsupported_newlines
-    assert_diagnoses(
-      [:error, :unexpected_token, { :token => 'tCOLON' }],
-      %Q{foo. :+},
-      %q{     ^ location},
-      SINCE_2_7)
-
-    assert_diagnoses(
-      [:error, :unexpected_token, { :token => 'tCOLON' }],
-      %Q{foo.: +},
-      %q{    ^ location},
-      SINCE_2_7)
-  end
-
   def test_unterimated_heredoc_id__27
     assert_diagnoses(
       [:error, :unterminated_heredoc_id],
@@ -7209,44 +7245,35 @@ class TestParser < Minitest::Test
     end
   end
 
-  def test_numbered_args_before_27
-    assert_diagnoses(
-      [:error, :ivar_name, { :name => '@1' }],
-      %q{m { @1 }},
-      %q{    ^^ location},
-      ALL_VERSIONS - SINCE_2_7
-    )
-  end
-
   def test_numbered_args_after_27
     assert_parses(
       s(:numblock,
         s(:send, nil, :m),
-        15,
+        9,
         s(:send,
-          s(:numparam, 1), :+,
-          s(:numparam, 15))),
-      %q{m { @1 + @15 }},
-      %q{^^^^^^^^^^^^^^ expression
-        |    ^^ name (send/2.numparam/1)
-        |    ^^ expression (send/2.numparam/1)
-        |         ^^^ name (send/2.numparam/2)
-        |         ^^^ expression (send/2.numparam/2)},
+          s(:lvar, :_1), :+,
+          s(:lvar, :_9))),
+      %q{m { _1 + _9 }},
+      %q{^^^^^^^^^^^^^ expression
+        |    ^^ name (send/2.lvar/1)
+        |    ^^ expression (send/2.lvar/1)
+        |         ^^ name (send/2.lvar/2)
+        |         ^^ expression (send/2.lvar/2)},
       SINCE_2_7)
 
     assert_parses(
       s(:numblock,
         s(:send, nil, :m),
-        15,
+        9,
         s(:send,
-          s(:numparam, 1), :+,
-          s(:numparam, 15))),
-      %q{m do @1 + @15 end},
-      %q{^^^^^^^^^^^^^^^^^ expression
-        |     ^^ name (send/2.numparam/1)
-        |     ^^ expression (send/2.numparam/1)
-        |          ^^^ name (send/2.numparam/2)
-        |          ^^^ expression (send/2.numparam/2)},
+          s(:lvar, :_1), :+,
+          s(:lvar, :_9))),
+      %q{m do _1 + _9 end},
+      %q{^^^^^^^^^^^^^^^^ expression
+        |     ^^ name (send/2.lvar/1)
+        |     ^^ expression (send/2.lvar/1)
+        |          ^^ name (send/2.lvar/2)
+        |          ^^ expression (send/2.lvar/2)},
       SINCE_2_7)
 
     # Lambdas
@@ -7254,31 +7281,31 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:numblock,
         s(:lambda),
-        15,
+        9,
         s(:send,
-          s(:numparam, 1), :+,
-          s(:numparam, 15))),
-      %q{-> { @1 + @15}},
-      %q{^^^^^^^^^^^^^^ expression
-        |     ^^ name (send.numparam/1)
-        |     ^^ expression (send.numparam/1)
-        |          ^^^ name (send.numparam/2)
-        |          ^^^ expression (send.numparam/2)},
+          s(:lvar, :_1), :+,
+          s(:lvar, :_9))),
+      %q{-> { _1 + _9}},
+      %q{^^^^^^^^^^^^^ expression
+        |     ^^ name (send.lvar/1)
+        |     ^^ expression (send.lvar/1)
+        |          ^^ name (send.lvar/2)
+        |          ^^ expression (send.lvar/2)},
       SINCE_2_7)
 
     assert_parses(
       s(:numblock,
         s(:lambda),
-        15,
+        9,
         s(:send,
-          s(:numparam, 1), :+,
-          s(:numparam, 15))),
-      %q{-> do @1 + @15 end},
-      %q{^^^^^^^^^^^^^^^^^^ expression
-        |      ^^ name (send.numparam/1)
-        |      ^^ expression (send.numparam/1)
-        |           ^^^ name (send.numparam/2)
-        |           ^^^ expression (send.numparam/2)},
+          s(:lvar, :_1), :+,
+          s(:lvar, :_9))),
+      %q{-> do _1 + _9 end},
+      %q{^^^^^^^^^^^^^^^^^ expression
+        |      ^^ name (send.lvar/1)
+        |      ^^ expression (send.lvar/1)
+        |           ^^ name (send.lvar/2)
+        |           ^^ expression (send.lvar/2)},
       SINCE_2_7)
   end
 
@@ -7287,37 +7314,37 @@ class TestParser < Minitest::Test
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m { || @1 } },
+      %q{m { || _1 } },
       %q{       ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m { |a| @1 } },
+      %q{m { |a| _1 } },
       %q{        ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m do || @1 end },
+      %q{m do || _1 end },
       %q{        ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m do |a, b| @1 end },
+      %q{m do |a, b| _1 end },
       %q{            ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m { |x = @1| }},
+      %q{m { |x = _1| }},
       %q{         ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{m { |x: @1| }},
+      %q{m { |x: _1| }},
       %q{        ^^ location},
       SINCE_2_7)
 
@@ -7325,77 +7352,161 @@ class TestParser < Minitest::Test
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->() { @1 } },
+      %q{->() { _1 } },
       %q{       ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->(a) { @1 } },
+      %q{->(a) { _1 } },
       %q{        ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->() do @1 end },
+      %q{->() do _1 end },
       %q{        ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->(a, b) do @1 end},
+      %q{->(a, b) do _1 end},
       %q{            ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->(x=@1) {}},
+      %q{->(x=_1) {}},
       %q{     ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{->(x: @1) {}},
+      %q{->(x: _1) {}},
       %q{      ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      %q{proc {|;a| @1}},
+      %q{proc {|;a| _1}},
       %q{           ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
       [:error, :ordinary_param_defined],
-      "proc {|\n| @1}",
+      "proc {|\n| _1}",
       %q{          ^^ location},
       SINCE_2_7)
   end
 
   def test_numparam_outside_block
-    assert_diagnoses(
-      [:error, :numparam_outside_block],
-      %q{class A; @1; end},
-      %q{         ^^ location},
+    assert_parses(
+      s(:class,
+        s(:const, nil, :A), nil,
+        s(:send, nil, :_1)),
+      %q{class A; _1; end},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:module,
+        s(:const, nil, :A),
+        s(:send, nil, :_1)),
+      %q{module A; _1; end},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:sclass,
+        s(:lvar, :foo),
+        s(:send, nil, :_1)),
+      %q{class << foo; _1; end},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:defs,
+        s(:self), :m,
+        s(:args),
+        s(:send, nil, :_1)),
+      %q{def self.m; _1; end},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:send, nil, :_1),
+      %q{_1},
+      %q{},
+      SINCE_2_7)
+  end
+
+  def test_assignment_to_numparams
+    assert_parses(
+      s(:block,
+        s(:send, nil, :proc),
+        s(:args),
+        s(:lvasgn, :_1,
+          s(:nil))),
+      %q{proc {_1 = nil}},
+      %q{},
       SINCE_2_7)
 
     assert_diagnoses(
-      [:error, :numparam_outside_block],
-      %q{module A; @1; end},
+      [:error, :cant_assign_to_numparam, { :name => '_1' }],
+      %q{proc {_1; _1 = nil}},
       %q{          ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
-      [:error, :numparam_outside_block],
-      %q{class << foo; @1; end},
-      %q{              ^^ location},
+      [:error, :cant_assign_to_numparam, { :name => '_1' }],
+      %q{proc {_1; _1, foo = [nil, nil]}},
+      %q{          ^^ location},
       SINCE_2_7)
 
     assert_diagnoses(
-      [:error, :numparam_outside_block],
-      %q{def self.m; @1; end},
-      %q{            ^^ location},
+      [:error, :cant_assign_to_numparam, { :name => '_1' }],
+      %q{proc {_9; _1 = nil}},
+      %q{          ^^ location},
       SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cant_assign_to_numparam, { :name => '_9' }],
+      %q{proc {_1; _9 = nil}},
+      %q{          ^^ location},
+      SINCE_2_7)
+
+    refute_diagnoses(
+      %q{proc { _1 = nil; _1}},
+      SINCE_2_7)
+  end
+
+  def test_numparams_in_nested_blocks
+    assert_diagnoses(
+      [:error, :numparam_used_in_outer_scope],
+      %q{foo { _1; bar { _2 }; }},
+      %q{                ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :numparam_used_in_outer_scope],
+      %q{-> { _1; -> { _2 }; }},
+      %q{              ^^ location},
+      SINCE_2_7)
+
+    [
+      ['class A', 'end'],
+      ['class << foo', 'end'],
+      ['def m', 'end'],
+      ['def self.m', 'end']
+    ].each do |open_scope, close_scope|
+      refute_diagnoses(
+        "proc { _1; #{open_scope}; proc { _2 }; #{close_scope}; }",
+        SINCE_2_7)
+
+      refute_diagnoses(
+        "-> { _1; #{open_scope}; -> { _2 }; #{close_scope}; }",
+        SINCE_2_7)
+    end
   end
 
   def test_ruby_bug_15789
@@ -7407,9 +7518,9 @@ class TestParser < Minitest::Test
             s(:optarg, :a,
               s(:numblock,
                 s(:lambda), 1,
-                s(:numparam, 1)))),
+                s(:lvar, :_1)))),
           s(:lvar, :a))),
-      %q{m ->(a = ->{@1}) {a}},
+      %q{m ->(a = ->{_1}) {a}},
       %q{},
       SINCE_2_7)
 
@@ -7421,9 +7532,9 @@ class TestParser < Minitest::Test
             s(:kwoptarg, :a,
               s(:numblock,
                 s(:lambda), 1,
-                s(:numparam, 1)))),
+                s(:lvar, :_1)))),
           s(:lvar, :a))),
-      %q{m ->(a: ->{@1}) {a}},
+      %q{m ->(a: ->{_1}) {a}},
       %q{},
       SINCE_2_7)
   end
@@ -7513,92 +7624,1808 @@ class TestParser < Minitest::Test
       SINCE_2_7)
   end
 
-  def test_pipeline_operator__27
-    assert_parses(
-      s(:send,
-        s(:lvar, :foo), :bar),
-      %q{foo |> bar},
-      %q{    ~~ dot
-        |       ~~~ selector
-        |~~~~~~~~~~ expression},
-      SINCE_2_7)
-
-    assert_parses(
-      s(:send,
-        s(:lvar, :foo), :bar,
-        s(:int, 1)),
-      %q{foo |> bar(1)},
-      %q{    ~~ dot
-        |       ~~~ selector
-        |          ~ begin
-        |            ~ end
-        |~~~~~~~~~~~~~ expression},
-      SINCE_2_7)
-
+  def test_parser_bug_604
     assert_parses(
       s(:block,
-        s(:send,
-          s(:lvar, :foo), :bar),
-        s(:args),
-        s(:int, 1)),
-      %q{foo |> bar { 1 }},
-      %q{    ~~ dot (send)},
-      SINCE_2_7
-    )
+        s(:send, nil, :m,
+          s(:send,
+            s(:send, nil, :a), :+,
+            s(:send, nil, :b))),
+        s(:args), nil),
+      %q{m a + b do end},
+      %q{},
+      ALL_VERSIONS)
+  end
 
+  def test_comments_before_leading_dot__27
     assert_parses(
       s(:send,
-        s(:lvar, :foo), :bar,
-        s(:int, 1)),
-      %q{foo |> bar 1},
-      %q{    ~~ dot},
+        s(:send, nil, :a), :foo),
+      %Q{a #\n#\n.foo\n},
+      %q{},
       SINCE_2_7)
 
     assert_parses(
-      s(:block,
-        s(:send,
-          s(:lvar, :foo), :bar,
-          s(:int, 1)),
-        s(:args),
-        s(:int, 2)),
-      %q{foo |> bar 1 do 2 end},
+      s(:send,
+        s(:send, nil, :a), :foo),
+      %Q{a #\n  #\n.foo\n},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:csend,
+        s(:send, nil, :a), :foo),
+      %Q{a #\n#\n&.foo\n},
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:csend,
+        s(:send, nil, :a), :foo),
+      %Q{a #\n  #\n&.foo\n},
       %q{},
       SINCE_2_7)
   end
 
-  def test_pipeline_operator_before_27
+  def test_comments_before_leading_dot__before_27
     assert_diagnoses(
-      [:error, :unexpected_token, { :token => 'tGT' }],
-      %q{a |> b},
-      %q{   ^ location},
+      [:error, :unexpected_token, { :token => 'tDOT' }],
+      %q{a #!#!.foo!}.gsub('!', "\n"),
+      %q{      ^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tAMPER' }],
+      %q{a #!#!&.foo!}.gsub('!', "\n"),
+      %q{      ^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT' }],
+      %q{a #!#!.:foo!}.gsub('!', "\n"),
+      %q{      ^ location},
       ALL_VERSIONS - SINCE_2_7)
   end
 
-  def test_pipeline_operator_newline
+  def test_circular_argument_reference_error
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{def m(foo = foo) end},
+      %q{            ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{def m(foo: foo) end},
+      %q{           ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{m { |foo = foo| } },
+      %q{           ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{m { |foo: foo| } },
+      %q{          ^^^ location},
+      SINCE_2_7)
+
+    # Traversing
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{def m(foo = class << foo; end) end},
+      %q{                     ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{def m(foo = def foo.m; end); end},
+      %q{                ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :circular_argument_reference, { :var_name => 'foo' }],
+      %q{m { |foo = proc { 1 + foo }| } },
+      %q{                      ^^^ location},
+      SINCE_2_7)
+
+    # Valid cases
+
+    [
+      'm { |foo = class A; foo; end| }',
+      'm { |foo = class << self; foo; end| }',
+      'm { |foo = def m(foo = bar); foo; end| }',
+      'm { |foo = def m(bar = foo); foo; end| }',
+      'm { |foo = def self.m(bar = foo); foo; end| }',
+      'def m(foo = def m; foo; end) end',
+      'def m(foo = def self.m; foo; end) end',
+      'm { |foo = proc { |bar| 1 + foo }| }',
+      'm { |foo = proc { || 1 + foo }| }'
+    ].each do |code|
+      refute_diagnoses(code, SINCE_2_7)
+    end
+  end
+
+  def test_forward_args
     assert_parses(
-      s(:send,
-        s(:lvar, :foo), :bar),
-      %q{foo!|> bar}.gsub('!', "\n"),
-      %q{    ~~ dot
-        |       ~~~ selector
-        |~~~~~~~~~~ expression},
+      s(:def, :foo,
+        s(:forward_args),
+        s(:send, nil, :bar,
+          s(:forwarded_args))),
+      %q{def foo(...); bar(...); end},
+      %q{       ~ begin (forward_args)
+        |       ~~~~~ expression (forward_args)
+        |           ~ end (forward_args)
+        |                  ~~~ expression (send.forwarded_args)},
       SINCE_2_7)
 
     assert_parses(
-      s(:send,
-        s(:lvar, :foo), :bar),
-      %q{foo |>! bar}.gsub('!', "\n"),
-      %q{    ~~ dot
-        |        ~~~ selector
-        |~~~~~~~~~~~ expression},
+      s(:def, :foo,
+        s(:forward_args),
+        s(:super,
+          s(:forwarded_args))),
+      %q{def foo(...); super(...); end},
+      %q{       ~ begin (forward_args)
+        |       ~~~~~ expression (forward_args)
+        |           ~ end (forward_args)
+        |                    ~~~ expression (super.forwarded_args)},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:def, :foo,
+        s(:forward_args),
+        nil),
+      %q{def foo(...); end},
+      %q{},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :block_and_blockarg],
+      %q{def foo(...) bar(...) { }; end},
+      %q{                 ^^^ location
+        |                      ~ highlights (0)},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{foo do |...| end},
+      %q{        ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{foo { |...| }},
+      %q{       ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{def foo(x,y,z); bar(...); end},
+      %q{                    ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{def foo(x,y,z); super(...); end},
+      %q{                      ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT3' }],
+      %q{->... {}},
+      %q{  ^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{->(...) {}},
+      %q{   ^^^ location},
+      SINCE_2_7)
+
+    # Here and below the parser asssumes that
+    # it can be a beginningless range, so the error comes after reducing right paren
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRPAREN' }],
+      %q{def foo(...); yield(...); end},
+      %q{                       ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRPAREN' }],
+      %q{def foo(...); return(...); end},
+      %q{                        ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRPAREN' }],
+      %q{def foo(...); a = (...); end},
+      %q{                      ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRBRACK' }],
+      %q{def foo(...); [...]; end},
+      %q{                  ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRBRACK' }],
+      %q{def foo(...) bar[...]; end},
+      %q{                    ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRBRACK' }],
+      %q{def foo(...) bar[...] = x; end},
+      %q{                    ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tRPAREN' }],
+      %q{def foo(...) defined?(...); end},
+      %q{                         ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT3' }],
+      %q{def foo ...; end},
+      %q{        ^^^ location},
       SINCE_2_7)
   end
 
-  def test_pipeline_operator_operation_before_pipe2
+  def test_erange_without_parentheses_at_eol
     assert_diagnoses(
-      [:error, :unexpected_token, { :token => 'tMINUS' }],
-      %q{a |> -b},
-      %q{     ^ location},
+      [:warning, :triple_dot_at_eol],
+      %Q{1...\n2},
+      %q{ ^^^ location},
       SINCE_2_7)
+
+    refute_diagnoses('(1...)', SINCE_2_7)
+    refute_diagnoses("(1...\n)", SINCE_2_7)
+    refute_diagnoses("[1...\n]", SINCE_2_7)
+    refute_diagnoses("{a: 1...\n2}", SINCE_2_7)
+  end
+
+  def test_embedded_document_with_eof
+    refute_diagnoses("=begin\n""=end", SINCE_2_7)
+    refute_diagnoses("=begin\n""=end\0", SINCE_2_7)
+    refute_diagnoses("=begin\n""=end\C-d", SINCE_2_7)
+    refute_diagnoses("=begin\n""=end\C-z", SINCE_2_7)
+
+    assert_diagnoses(
+      [:fatal, :embedded_document],
+      "=begin\n",
+      %q{},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:fatal, :embedded_document],
+      "=begin",
+      %q{},
+      SINCE_2_7)
+  end
+
+  def test_interp_digit_var
+    # '#@1'
+    assert_parses(
+      s(:str, '#@1'),
+      %q{ '#@1' },
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:str, '#@@1'),
+      %q{ '#@@1' },
+      %q{},
+      ALL_VERSIONS)
+
+    # <<-'HERE'
+    #   #@1
+    # HERE
+    assert_parses(
+      s(:str, '#@1' + "\n"),
+      %q{<<-'HERE'!#@1!HERE}.gsub('!', "\n"),
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:str, '#@@1' + "\n"),
+      %q{<<-'HERE'!#@@1!HERE}.gsub('!', "\n"),
+      %q{},
+      ALL_VERSIONS)
+
+    # %q{#@1}
+    assert_parses(
+      s(:str, '#@1'),
+      %q{ %q{#@1} },
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:str, '#@@1'),
+      %q{ %q{#@@1} },
+      %q{},
+      ALL_VERSIONS)
+
+    # "#@1"
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ "#@1" },
+      %q{   ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ "#@@1" },
+      %q{   ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@1'),
+      %q{ "#@1" },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@@1'),
+      %q{ "#@@1" },
+      %q{},
+      SINCE_2_7)
+
+    # <<-"HERE"
+    #   #@1
+    # HERE
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ <<-"HERE"!#@1!HERE }.gsub('!', "\n"),
+      %q{            ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ <<-"HERE"!#@@1!HERE }.gsub('!', "\n"),
+      %q{            ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@1' + "\n"),
+      %q{<<-"HERE"!#@1!HERE}.gsub('!', "\n"),
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@@1' + "\n"),
+      %q{<<-"HERE"!#@@1!HERE}.gsub('!', "\n"),
+      %q{},
+      SINCE_2_7)
+
+    # %{#@1}
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %{#@1} },
+      %q{    ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %{#@@1} },
+      %q{    ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@1'),
+      %q{ %{#@1} },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@@1'),
+      %q{ %{#@@1} },
+      %q{},
+      SINCE_2_7)
+
+    # %Q{#@1}
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %Q{#@1} },
+      %q{     ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %Q{#@@1} },
+      %q{     ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@1'),
+      %q{ %Q{#@1} },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:str, '#@@1'),
+      %q{ %Q{#@@1} },
+      %q{},
+      SINCE_2_7)
+
+    # %w[#@1]
+    assert_parses(
+      s(:array,
+        s(:str, '#@1')),
+      %q{ %w[ #@1 ] },
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:array,
+        s(:str, '#@@1')),
+      %q{ %w[ #@@1 ] },
+      %q{},
+      ALL_VERSIONS)
+
+    # %W[#@1]
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %W[#@1] },
+      %q{     ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %W[#@@1] },
+      %q{     ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:array,
+        s(:str, '#@1')),
+      %q{ %W[#@1] },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:array,
+        s(:str, '#@@1')),
+      %q{ %W[#@@1] },
+      %q{},
+      SINCE_2_7)
+
+    # %i[#@1]
+    assert_parses(
+      s(:array,
+        s(:sym, :'#@1')),
+      %q{ %i[ #@1 ] },
+      %q{},
+      SINCE_2_0)
+
+    assert_parses(
+      s(:array,
+        s(:sym, :'#@@1')),
+      %q{ %i[ #@@1 ] },
+      %q{},
+      SINCE_2_0)
+
+    # %I[#@1]
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %I[#@1] },
+      %q{     ^^ location},
+      SINCE_2_0 - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %I[#@@1] },
+      %q{     ^^^ location},
+      SINCE_2_0 - SINCE_2_7)
+
+    assert_parses(
+      s(:array,
+        s(:sym, :'#@1')),
+      %q{ %I[#@1] },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:array,
+        s(:sym, :'#@@1')),
+      %q{ %I[#@@1] },
+      %q{},
+      SINCE_2_7)
+
+    # :'#@1'
+    assert_parses(
+      s(:sym, :'#@1'),
+      %q{ :'#@1' },
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:sym, :'#@@1'),
+      %q{ :'#@@1' },
+      %q{},
+      ALL_VERSIONS)
+
+    # %s{#@1}
+    assert_parses(
+      s(:sym, :'#@1'),
+      %q{ %s{#@1} },
+      %q{},
+      ALL_VERSIONS)
+
+    assert_parses(
+      s(:sym, :'#@@1'),
+      %q{ %s{#@@1} },
+      %q{},
+      ALL_VERSIONS)
+
+    # :"#@1"
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ :"#@1" },
+      %q{    ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ :"#@@1" },
+      %q{    ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:sym, :'#@1'),
+      %q{ :"#@1" },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:sym, :'#@@1'),
+      %q{ :"#@@1" },
+      %q{},
+      SINCE_2_7)
+
+    # /#@1/
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ /#@1/ },
+      %q{   ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ /#@@1/ },
+      %q{   ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:regexp,
+        s(:str, '#@1'),
+        s(:regopt)),
+      %q{ /#@1/ },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:regexp,
+        s(:str, '#@@1'),
+        s(:regopt)),
+      %q{ /#@@1/ },
+      %q{},
+      SINCE_2_7)
+
+    # %r{#@1}
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %r{#@1} },
+      %q{     ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %r{#@@1} },
+      %q{     ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:regexp,
+        s(:str, '#@1'),
+        s(:regopt)),
+      %q{ %r{#@1} },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:regexp,
+        s(:str, '#@@1'),
+        s(:regopt)),
+      %q{ %r{#@@1} },
+      %q{},
+      SINCE_2_7)
+
+    # %x{#@1}
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ %x{#@1} },
+      %q{     ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ %x{#@@1} },
+      %q{     ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@1')),
+      %q{ %x{#@1} },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@@1')),
+      %q{ %x{#@@1} },
+      %q{},
+      SINCE_2_7)
+
+    # `#@1`
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ `#@1` },
+      %q{   ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ `#@@1` },
+      %q{   ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@1')),
+      %q{ `#@1` },
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@@1')),
+      %q{ `#@@1` },
+      %q{},
+      SINCE_2_7)
+
+    # <<-`HERE`
+    #   #@1
+    # HERE
+    assert_diagnoses(
+      [:error, :ivar_name, { :name => '@1' }],
+      %q{ <<-`HERE`!#@1!HERE }.gsub('!', "\n"),
+      %q{            ^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :cvar_name, { :name => '@@1' }],
+      %q{ <<-`HERE`!#@@1!HERE }.gsub('!', "\n"),
+      %q{            ^^^ location},
+      ALL_VERSIONS - SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@1' + "\n")),
+      %q{<<-`HERE`!#@1!HERE}.gsub('!', "\n"),
+      %q{},
+      SINCE_2_7)
+
+    assert_parses(
+      s(:xstr,
+        s(:str, '#@@1' + "\n")),
+      %q{<<-`HERE`!#@@1!HERE}.gsub('!', "\n"),
+      %q{},
+      SINCE_2_7)
+  end
+
+  def assert_parses_pattern_match(ast, code, source_maps = '', versions = SINCE_2_7)
+    case_pre = "case foo; "
+    source_maps_offset = case_pre.length
+    source_maps_prefix = ' ' * source_maps_offset
+    source_maps = source_maps
+      .lines
+      .map { |line| source_maps_prefix + line.sub(/^\s*\|/, '') }
+      .join("\n")
+
+    assert_parses(
+      s(:case_match,
+        s(:lvar, :foo),
+        ast,
+        nil),
+      "#{case_pre}#{code}; end",
+      source_maps,
+      SINCE_2_7
+    )
+  end
+
+  def test_pattern_matching_single_match
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:match_var, :x),
+        nil,
+        s(:lvar, :x)),
+      %q{in x then x},
+      %q{~~ keyword (in_pattern)
+        |~~~~~~~~~~~ expression (in_pattern)
+        |     ~~~~ begin (in_pattern)
+        |   ~ expression (in_pattern.match_var)
+        |   ~ name (in_pattern.match_var)}
+    )
+  end
+
+  def test_pattern_matching_no_body
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:int, 1), nil, nil),
+      %q{in 1}
+    )
+  end
+
+  def test_pattern_matching_if_unless_modifiers
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:match_var, :x),
+        s(:if_guard, s(:true)),
+        s(:nil)
+      ),
+      %q{in x if true; nil},
+      %q{~~ keyword (in_pattern)
+        |~~~~~~~~~~~~~~~~~ expression (in_pattern)
+        |            ~ begin (in_pattern)
+        |     ~~ keyword (in_pattern.if_guard)
+        |     ~~~~~~~ expression (in_pattern.if_guard)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:match_var, :x),
+        s(:unless_guard, s(:true)),
+        s(:nil)
+      ),
+      %q{in x unless true; nil},
+      %q{~~ keyword (in_pattern)
+        |~~~~~~~~~~~~~~~~~~~~~ expression (in_pattern)
+        |                ~ begin (in_pattern)
+        |     ~~~~~~ keyword (in_pattern.unless_guard)
+        |     ~~~~~~~~~~~ expression (in_pattern.unless_guard)}
+    )
+  end
+
+  def test_pattern_matching_pin_variable
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:pin, s(:lvar, :foo)),
+        nil,
+        s(:nil)),
+      %q{in ^foo then nil},
+      %q{   ~ selector (in_pattern.pin)
+        |   ~~~~ expression (in_pattern.pin)
+        |    ~~~ name (in_pattern.pin.lvar)}
+    )
+  end
+
+  def test_pattern_matching_implicit_array_match
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern_with_tail,
+          s(:match_var, :x)),
+        nil,
+        s(:nil)),
+      %q{in x, then nil},
+      %q{   ~~ expression (in_pattern.array_pattern_with_tail)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_rest,
+            s(:match_var, :x))),
+        nil,
+        s(:nil)),
+      %q{in *x then nil},
+      %q{   ~~ expression (in_pattern.array_pattern)
+        |   ~ operator (in_pattern.array_pattern.match_rest)
+        |    ~ name (in_pattern.array_pattern.match_rest.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_rest)),
+        nil,
+        s(:nil)),
+      %q{in * then nil},
+      %q{   ~ expression (in_pattern.array_pattern)
+        |   ~ operator (in_pattern.array_pattern.match_rest)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_var, :y)),
+        nil,
+        s(:nil)),
+      %q{in x, y then nil},
+      %q{   ~~~~ expression (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern_with_tail,
+          s(:match_var, :x),
+          s(:match_var, :y)),
+        nil,
+        s(:nil)),
+      %q{in x, y, then nil},
+      %q{   ~~~~~ expression (in_pattern.array_pattern_with_tail)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_rest, s(:match_var, :y)),
+          s(:match_var, :z)),
+        nil,
+        s(:nil)),
+      %q{in x, *y, z then nil},
+      %q{   ~~~~~~~~ expression (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_rest, s(:match_var, :x)),
+          s(:match_var, :y),
+          s(:match_var, :z)),
+        nil,
+        s(:nil)),
+      %q{in *x, y, z then nil},
+      %q{   ~~~~~~~~ expression (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:int, 1),
+          s(:str, 'a'),
+          s(:array_pattern),
+          s(:hash_pattern)),
+        nil,
+        s(:nil)),
+      %q{in 1, "a", [], {} then nil},
+      %q{   ~~~~~~~~~~~~~~ expression (in_pattern.array_pattern)}
+    )
+  end
+
+  def test_pattern_matching_explicit_array_match
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x)),
+        nil,
+        s(:nil)),
+      %q{in [x] then nil},
+      %q{   ~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |     ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern_with_tail,
+          s(:match_var, :x)),
+        nil,
+        s(:nil)),
+      %q{in [x,] then nil},
+      %q{   ~~~~ expression (in_pattern.array_pattern_with_tail)
+        |   ~ begin (in_pattern.array_pattern_with_tail)
+        |      ~ end (in_pattern.array_pattern_with_tail)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_var, :y)),
+        nil,
+        s(:true)),
+      %q{in [x, y] then true},
+      %q{   ~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |        ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern_with_tail,
+          s(:match_var, :x),
+          s(:match_var, :y)),
+        nil,
+        s(:true)),
+      %q{in [x, y,] then true},
+      %q{   ~~~~~~~ expression (in_pattern.array_pattern_with_tail)
+        |   ~ begin (in_pattern.array_pattern_with_tail)
+        |         ~ end (in_pattern.array_pattern_with_tail)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_var, :y),
+          s(:match_rest)),
+        nil,
+        s(:true)),
+      %q{in [x, y, *] then true},
+      %q{   ~~~~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |           ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_var, :y),
+          s(:match_rest, s(:match_var, :z))),
+        nil,
+        s(:true)),
+      %q{in [x, y, *z] then true},
+      %q{   ~~~~~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |            ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_rest, s(:match_var, :y)),
+          s(:match_var, :z)),
+        nil,
+        s(:true)),
+      %q{in [x, *y, z] then true},
+      %q{   ~~~~~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |            ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_var, :x),
+          s(:match_rest),
+          s(:match_var, :y)),
+        nil,
+        s(:true)),
+      %q{in [x, *, y] then true},
+      %q{   ~~~~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |           ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_rest, s(:match_var, :x)),
+          s(:match_var, :y)),
+        nil,
+        s(:true)),
+      %q{in [*x, y] then true},
+      %q{   ~~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |         ~ end (in_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:array_pattern,
+          s(:match_rest),
+          s(:match_var, :x)),
+        nil,
+        s(:true)),
+      %q{in [*, x] then true},
+      %q{   ~~~~~~ expression (in_pattern.array_pattern)
+        |   ~ begin (in_pattern.array_pattern)
+        |        ~ end (in_pattern.array_pattern)}
+    )
+  end
+
+  def test_pattern_matching_hash
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern),
+        nil,
+        s(:true)),
+      %q{in {} then true},
+      %q{   ~~ expression (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in a: 1 then true},
+      %q{   ~~~~ expression (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in { a: 1 } then true},
+      %q{   ~~~~~~~~ expression (in_pattern.hash_pattern)
+        |   ~ begin (in_pattern.hash_pattern)
+        |          ~ end (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in { a: 1, } then true},
+      %q{   ~~~~~~~~~ expression (in_pattern.hash_pattern)
+        |   ~ begin (in_pattern.hash_pattern)
+        |           ~ end (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in a: then true},
+      %q{   ~~ expression (in_pattern.hash_pattern)
+        |   ~ name (in_pattern.hash_pattern.match_var)
+        |   ~~ expression (in_pattern.hash_pattern.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_rest, s(:match_var, :a))),
+        nil,
+        s(:true)),
+      %q{in **a then true},
+      %q{   ~~~ expression (in_pattern.hash_pattern)
+        |   ~~~ expression (in_pattern.hash_pattern.match_rest)
+        |   ~~ operator (in_pattern.hash_pattern.match_rest)
+        |     ~ expression (in_pattern.hash_pattern.match_rest.match_var)
+        |     ~ name (in_pattern.hash_pattern.match_rest.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_rest)),
+        nil,
+        s(:true)),
+      %q{in ** then true},
+      %q{   ~~ expression (in_pattern.hash_pattern)
+        |   ~~ expression (in_pattern.hash_pattern.match_rest)
+        |   ~~ operator (in_pattern.hash_pattern.match_rest)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1)),
+          s(:pair, s(:sym, :b), s(:int, 2))),
+        nil,
+        s(:true)),
+      %q{in a: 1, b: 2 then true},
+      %q{   ~~~~~~~~~~ expression (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a),
+          s(:match_var, :b)),
+        nil,
+        s(:true)),
+      %q{in a:, b: then true},
+      %q{   ~~~~~~ expression (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1)),
+          s(:match_var, :_a),
+          s(:match_rest)),
+        nil,
+        s(:true)),
+      %q{in a: 1, _a:, ** then true},
+      %q{   ~~~~~~~~~~~~~ expression (in_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:sym, :a),
+            s(:int, 1))), nil,
+        s(:false)),
+      %q{
+        in {a: 1
+        }
+          false
+      },
+      %q{}
+    )
+
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:sym, :a),
+            s(:int, 2))), nil,
+        s(:false)),
+      %q{
+        in {a:
+              2}
+          false
+      },
+      %q{}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:sym, :a),
+            s(:hash_pattern,
+              s(:match_var, :b))),
+          s(:match_var, :c)), nil,
+        s(:send, nil, :p,
+          s(:lvar, :c))),
+      %q{
+        in a: {b:}, c:
+          p c
+      },
+      %q{}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)), nil,
+        s(:true)),
+      %q{
+        in {a:
+        }
+          true
+      },
+      %q{}
+    )
+  end
+
+  def test_pattern_matching_hash_with_string_keys
+    # Match + assign
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in "a": then true},
+      %q{   ~~~~ expression (in_pattern.hash_pattern.match_var)
+        |    ~ name (in_pattern.hash_pattern.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in "#{ 'a' }": then true},
+      %q{   ~~~~~~~~~~~ expression (in_pattern.hash_pattern.match_var)
+        |        ~ name (in_pattern.hash_pattern.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in "#{ %q{a} }": then true},
+      %q{   ~~~~~~~~~~~~~ expression (in_pattern.hash_pattern.match_var)
+        |          ~ name (in_pattern.hash_pattern.match_var)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in "#{ %Q{a} }": then true},
+      %q{   ~~~~~~~~~~~~~ expression (in_pattern.hash_pattern.match_var)
+        |          ~ name (in_pattern.hash_pattern.match_var)}
+    )
+
+    # Only match
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair, s(:sym, :a), s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in "a": 1 then true},
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:dsym, s(:begin, s(:str, "a"))),
+            s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in "#{ 'a' }": 1 then true},
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:dsym, s(:begin, s(:str, "a"))),
+            s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in "#{ %q{a} }": 1 then true},
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
+            s(:dsym, s(:begin, s(:str, "a"))),
+            s(:int, 1))),
+        nil,
+        s(:true)),
+      %q{in "#{ %Q{a} }": 1 then true},
+    )
+  end
+
+  def test_pattern_matching_hash_with_heredoc_keys
+    # Ruby <3, the following case is acceptable by the MRI's grammar,
+    # so it has to be reducable by parser.
+    # We have a code for that in the builder.rb that reject it via
+    # diagnostic error because of the wrong lvar name
+    assert_diagnoses(
+      [:error, :lvar_name, { name: "a\n" }],
+      %Q{case nil; in "\#{ <<-HERE }":;\na\nHERE\nelse\nend},
+      %q{                 ~~~~~~~ location},
+      SINCE_2_7
+    )
+  end
+
+  def test_pattern_matching_hash_with_string_interpolation_keys
+    assert_diagnoses(
+      [:error, :pm_interp_in_var_name],
+      %q{case a; in "#{a}": 1; end},
+      %q{           ~~~~~~~ location},
+      SINCE_2_7
+    )
+  end
+
+  def test_pattern_matching_keyword_variable
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:self),
+        nil,
+        s(:true)),
+      %q{in self then true}
+    )
+  end
+
+  def test_pattern_matching_lambda
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:block,
+          s(:lambda),
+          s(:args),
+          s(:int, 42)),
+        nil,
+        s(:true)),
+      %q{in ->{ 42 } then true}
+    )
+  end
+
+  def test_pattern_matching_ranges
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:irange, s(:int, 1), s(:int, 2)),
+        nil,
+        s(:true)),
+      %q{in 1..2 then true}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:irange, s(:int, 1), nil),
+        nil,
+        s(:true)),
+      %q{in 1.. then true}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:irange, nil, s(:int, 2)),
+        nil,
+        s(:true)),
+      %q{in ..2 then true}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:erange, s(:int, 1), s(:int, 2)),
+        nil,
+        s(:true)),
+      %q{in 1...2 then true}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:erange, s(:int, 1), nil),
+        nil,
+        s(:true)),
+      %q{in 1... then true}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:erange, nil, s(:int, 2)),
+        nil,
+        s(:true)),
+      %q{in ...2 then true}
+    )
+  end
+
+  def test_pattern_matching_expr_in_paren
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:begin, s(:int, 1)),
+        nil,
+        s(:true)),
+      %q{in (1) then true},
+      %q{   ~~~ expression (in_pattern.begin)
+        |   ~ begin (in_pattern.begin)
+        |     ~ end (in_pattern.begin)}
+    )
+  end
+
+  def test_pattern_matching_constants
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const, nil, :A),
+        nil,
+        s(:true)),
+      %q{in A then true},
+      %q{   ~ expression (in_pattern.const)
+        |   ~ name (in_pattern.const)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const, s(:const, nil, :A), :B),
+        nil,
+        s(:true)),
+      %q{in A::B then true},
+      %q{   ~~~~ expression (in_pattern.const)
+        |    ~~ double_colon (in_pattern.const)
+        |      ~ name (in_pattern.const)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const, s(:cbase), :A),
+        nil,
+        s(:true)),
+      %q{in ::A then true},
+      %q{   ~~~ expression (in_pattern.const)
+        |   ~~ double_colon (in_pattern.const)
+        |     ~ name (in_pattern.const)}
+    )
+  end
+
+  def test_pattern_matching_const_pattern
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:array_pattern,
+            s(:int, 1),
+            s(:int, 2))),
+        nil,
+        s(:true)),
+      %q{in A(1, 2) then true},
+      %q{   ~~~~~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |         ~ end (in_pattern.const_pattern)
+        |   ~ expression (in_pattern.const_pattern.const)
+        |     ~~~~ expression (in_pattern.const_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:hash_pattern,
+            s(:match_var, :x))),
+        nil,
+        s(:true)),
+      %q{in A(x:) then true},
+      %q{   ~~~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |       ~ end (in_pattern.const_pattern)
+        |   ~ expression (in_pattern.const_pattern.const)
+        |     ~~ expression (in_pattern.const_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:array_pattern)),
+        nil,
+        s(:true)),
+      %q{in A() then true},
+      %q{   ~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |     ~ end (in_pattern.const_pattern)
+        |   ~ expression (in_pattern.const_pattern.const)
+        |    ~~ expression (in_pattern.const_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:array_pattern,
+            s(:int, 1),
+            s(:int, 2))),
+        nil,
+        s(:true)),
+      %q{in A[1, 2] then true},
+      %q{   ~~~~~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |         ~ end (in_pattern.const_pattern)
+        |   ~ expression (in_pattern.const_pattern.const)
+        |     ~~~~ expression (in_pattern.const_pattern.array_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:hash_pattern,
+            s(:match_var, :x))),
+        nil,
+        s(:true)),
+      %q{in A[x:] then true},
+      %q{   ~~~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |       ~ end (in_pattern.const_pattern)
+        |   ~ expression (in_pattern.const_pattern.const)
+        |     ~~ expression (in_pattern.const_pattern.hash_pattern)}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :A),
+          s(:array_pattern)),
+        nil,
+        s(:true)),
+      %q{in A[] then true},
+      %q{   ~~~ expression (in_pattern.const_pattern)
+        |    ~ begin (in_pattern.const_pattern)
+        |     ~ end (in_pattern.const_pattern)
+        |    ~~ expression (in_pattern.const_pattern.array_pattern)}
+    )
+  end
+
+  def test_pattern_matching_match_alt
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:match_alt, s(:int, 1), s(:int, 2)),
+        nil,
+        s(:true)),
+      %q{in 1 | 2 then true},
+      %q{   ~~~~~ expression (in_pattern.match_alt)
+        |     ~ operator (in_pattern.match_alt)}
+    )
+  end
+
+  def test_pattern_matching_match_as
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:match_as,
+          s(:int, 1),
+          s(:match_var, :a)),
+        nil,
+        s(:true)),
+      %q{in 1 => a then true},
+      %q{   ~~~~~~ expression (in_pattern.match_as)
+        |     ~~ operator (in_pattern.match_as)}
+    )
+  end
+
+  def test_pattern_matching_else
+    assert_parses(
+      s(:case_match,
+        s(:int, 1),
+        s(:in_pattern,
+          s(:int, 2), nil,
+          s(:int, 3)),
+        s(:int, 4)),
+      %q{case 1; in 2; 3; else; 4; end},
+      %q{                 ~~~~ else},
+      SINCE_2_7
+    )
+  end
+
+  def test_pattern_matching_blank_else
+    assert_parses(
+      s(:case_match,
+        s(:int, 1),
+        s(:in_pattern,
+          s(:int, 2), nil,
+          s(:int, 3)),
+        s(:empty_else)),
+      %q{case 1; in 2; 3; else; end},
+      %q{                 ~~~~ else},
+      SINCE_2_7
+    )
+  end
+
+  def assert_pattern_matching_defines_local_variables(match_code, lvar_names, versions = SINCE_2_7)
+    code = "case 1; #{match_code}; then [#{lvar_names.join(', ')}]; end"
+
+    with_versions(versions) do |version, parser|
+      source_file = Parser::Source::Buffer.new('(assert_context)')
+      source_file.source = code
+
+      lvar_names.each do |lvar_name|
+        refute parser.static_env.declared?(lvar_name),
+          "(#{version}) local variable #{lvar_name.to_s.inspect} has to be undefined before asserting"
+      end
+
+      before = parser.static_env.instance_variable_get(:@variables).to_a
+
+      begin
+        parsed_ast = parser.parse(source_file)
+      rescue Parser::SyntaxError => exc
+        backtrace = exc.backtrace
+        Exception.instance_method(:initialize).bind(exc).
+          call("(#{version}) #{exc.message}")
+        exc.set_backtrace(backtrace)
+        raise
+      end
+
+      lvar_names.each do |lvar_name|
+        assert parser.static_env.declared?(lvar_name),
+          "(#{version}) expected local variable #{lvar_name.to_s.inspect} to be defined after parsing"
+      end
+
+      after = parser.static_env.instance_variable_get(:@variables).to_a
+      extra = after - before - lvar_names
+
+      assert extra.empty?,
+             "(#{version}) expected only #{lvar_names.inspect} " \
+             "to be defined during parsing, but also got #{extra.inspect}"
+    end
+  end
+
+  def test_pattern_matching_creates_locals
+    assert_pattern_matching_defines_local_variables(
+      %q{in a, *b, c},
+      [:a, :b, :c]
+    )
+
+    assert_pattern_matching_defines_local_variables(
+      %q{in d | e | f},
+      [:d, :e, :f]
+    )
+
+    assert_pattern_matching_defines_local_variables(
+      %q{in { g:, **h }},
+      [:g, :h]
+    )
+
+    assert_pattern_matching_defines_local_variables(
+      %q{in A(i, *j, k)},
+      [:i, :j, :k]
+    )
+
+    assert_pattern_matching_defines_local_variables(
+      %q{in 1 => l},
+      [:l]
+    )
+
+    assert_pattern_matching_defines_local_variables(
+      %q{in "m":},
+      [:m]
+    )
+  end
+
+  def test_pattern_matching__FILE__LINE_literals
+    assert_parses(
+      s(:case_match,
+        s(:array,
+          s(:str, "(assert_parses)"),
+          s(:send,
+            s(:int, 1), :+,
+            s(:int, 1)),
+          s(:__ENCODING__)),
+        s(:in_pattern,
+          s(:array_pattern,
+            s(:str, "(assert_parses)"),
+            s(:int, 2),
+            s(:__ENCODING__)), nil, nil), nil),
+      <<-RUBY,
+        case [__FILE__, __LINE__ + 1, __ENCODING__]
+          in [__FILE__, __LINE__, __ENCODING__]
+        end
+      RUBY
+      %q{},
+      SINCE_2_7)
+  end
+
+  def test_pattern_matching_nil_pattern
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:match_nil_pattern)),
+        nil,
+        s(:true)),
+      %q{in **nil then true},
+      %q{   ~~~~~ expression (in_pattern.hash_pattern.match_nil_pattern)
+        |     ~~~ name (in_pattern.hash_pattern.match_nil_pattern)}
+    )
+  end
+
+  def test_pattern_matching_single_line
+    assert_parses(
+      s(:begin,
+        s(:in_match,
+          s(:int, 1),
+          s(:array_pattern,
+            s(:match_var, :a))),
+        s(:lvar, :a)),
+      %q{1 in [a]; a},
+      %q{~~~~~~~~ expression (in_match)
+        |  ~~ operator (in_match)},
+      SINCE_2_7)
+  end
+
+  def test_ruby_bug_pattern_matching_restore_in_kwarg_flag
+    refute_diagnoses(
+      "p(({} in {a:}), a:\n 1)",
+      SINCE_2_7)
+  end
+
+  def test_pattern_matching_duplicate_variable_name
+    assert_diagnoses(
+      [:error, :duplicate_variable_name, { :name => 'a' }],
+      %q{case 0; in a, a; end},
+      %q{              ^ location},
+      SINCE_2_7)
+
+    refute_diagnoses(
+      %q{case [0, 1, 2, 3]; in _, _, _a, _a; end},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_variable_name, { :name => 'a' }],
+      %q{case 0; in a, {a:}; end},
+      %q{               ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_variable_name, { :name => 'a' }],
+      %q{case 0; in a, {"a":}; end},
+      %q{                ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_variable_name, { :name => 'a' }],
+      %q{0 in [a, a]},
+      %q{         ^ location},
+      SINCE_2_7)
+  end
+
+  def test_pattern_matching_duplicate_hash_keys
+    assert_diagnoses(
+      [:error, :duplicate_pattern_key, { :name => 'a' }],
+      %q{ case 0; in a: 1, a: 2; end },
+      %q{                  ^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_pattern_key, { :name => 'a' }],
+      %q{ case 0; in a: 1, "a": 2; end },
+      %q{                  ^^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_pattern_key, { :name => 'a' }],
+      %q{ case 0; in "a": 1, "a": 2; end },
+      %q{                    ^^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_pattern_key, { :name => "a\0" }],
+      %q{ case 0; in "a\x0":a1, "a\0":a2; end },
+      %q{                       ^^^^^^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :duplicate_pattern_key, { :name => "abc" }],
+      %q{ case 0; in "abc":a1, "a#{"b"}c":a2; end },
+      %q{                      ^^^^^^^^^^^ location},
+      SINCE_2_7)
+  end
+
+  def test_pattern_matching_required_parentheses_for_in_match
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tCOMMA' }],
+      %{1 in a, b},
+      %{      ^ location},
+      SINCE_2_7)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tLABEL' }],
+      %{1 in a:},
+      %{     ^^ location},
+      SINCE_2_7)
+  end
+
+  def test_pattern_matching_required_bound_variable_before_pin
+    assert_diagnoses(
+      [:error, :undefined_lvar, { :name => 'a' }],
+      %{case 0; in ^a; true; end},
+      %{            ^ location},
+      SINCE_2_7)
+  end
+
+  def test_parser_bug_645
+    assert_parses(
+      s(:block,
+        s(:lambda),
+        s(:args,
+          s(:optarg, :arg,
+            s(:hash))), nil),
+      '-> (arg={}) {}',
+      %{},
+      SINCE_1_9)
   end
 end

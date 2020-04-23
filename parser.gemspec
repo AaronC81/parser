@@ -13,6 +13,13 @@ Gem::Specification.new do |spec|
   spec.homepage      = 'https://github.com/whitequark/parser'
   spec.license       = 'MIT'
 
+  spec.metadata = {
+    'bug_tracker_uri' => 'https://github.com/whitequark/parser/issues',
+    'changelog_uri' => "https://github.com/whitequark/parser/blob/v#{spec.version}/CHANGELOG.md",
+    'documentation_uri' => "https://www.rubydoc.info/gems/parser/#{spec.version}",
+    'source_code_uri' => "https://github.com/whitequark/parser/tree/v#{spec.version}"
+  }
+
   spec.files         = `git ls-files`.split + %w(
                           lib/parser/lexer.rb
                           lib/parser/ruby18.rb
@@ -25,6 +32,7 @@ Gem::Specification.new do |spec|
                           lib/parser/ruby25.rb
                           lib/parser/ruby26.rb
                           lib/parser/ruby27.rb
+                          lib/parser/ruby28.rb
                           lib/parser/macruby.rb
                           lib/parser/rubymotion.rb
                        )
@@ -38,7 +46,7 @@ Gem::Specification.new do |spec|
 
   spec.add_development_dependency 'bundler',   '>= 1.15', '< 3.0.0'
   spec.add_development_dependency 'rake',      '~> 10.0'
-  spec.add_development_dependency 'racc',      '= 1.4.14'
+  spec.add_development_dependency 'racc',      '= 1.4.15'
   spec.add_development_dependency 'cliver',    '~> 0.3.2'
 
   spec.add_development_dependency 'yard'

@@ -1,6 +1,112 @@
 Changelog
 =========
 
+v2.7.1.1 (2020-04-15)
+---------------------
+
+Features implemented:
+ * Add Source::Range#eql? and hash (#675) (Marc-André Lafortune)
+ * Source::TreeRewriter: Add #merge, #merge! and #empty? (#674) (Marc-André Lafortune)
+
+v2.7.1.0 (2020-04-03)
+---------------------
+
+API modifications:
+ * Bump ruby versions to 2.4.10, 2.5.8, 2.6.6, 2.7.1. (#665) (Ilya Bylich)
+
+Features implemented:
+ * ruby27.y: allow newlines inside braced pattern. (#664) (Ilya Bylich)
+ * ruby27.y: Allow trailing comma in hash pattern (#661) (Koichi ITO)
+
+v2.7.0.5 (2020-03-20)
+---------------------
+
+Features implemented:
+ * ruby27.y: fix array pattern with tail source map (#659) (Vladimir Dementyev)
+
+Bugs fixed:
+ * builder.rb: fix constant_pattern source map (#660) (Vladimir Dementyev)
+
+v2.7.0.4 (2020-03-02)
+---------------------
+
+Bugs fixed:
+ * lexer.rl: allow spaces before comments-before-leading-dot. (#654) (Ilya Bylich)
+
+v2.7.0.2 (2020-01-08)
+---------------------
+
+Bugs fixed:
+ * lexer.rl: fix paren_nest for curly braces (#646) (Ilya Bylich)
+
+v2.7.0.1 (2019-12-30)
+---------------------
+
+Bugs fixed:
+ * dedenter.rb: prevent `ArgumentError` when processing binary en… (#642) (Koichi ITO)
+
+v2.7.0.0 (2019-12-26)
+---------------------
+
+API modifications:
+ * README.md: documented compatibility issue with EOF chars after… (#637) (Ilya Bylich)
+ * ruby27.y: refactor logic around 'circular argument reference'(#628) (Ilya Bylich)
+
+Features implemented:
+ * ruby27.y: added pattern matching (#574) (Ilya Bylich)
+ * lexer.rl: parse embedded ivars/cvars starting with digit as str (#639) (Ilya Bylich)
+ * lexer.rl: warn on `...` at EOL. (#636) (Ilya Bylich)
+ * ruby27.y: removed opt_block_args_tail: tOROP rule. (#635) (Ilya Bylich)
+ * ruby27.y: reverted method reference operator (added in #634) (Ilya Bylich)
+ * ruby27.y: treat numparams as locals outside numblock. (#633) (Ilya Bylich)
+
+Bugs fixed:
+ * dedenter.rb: fixed over-dedenting of squiggly heredocs (#641) (Ilya Bylich)
+ * ruby27.y: added "arguments forwarding" (#625) (Ilya Bylich)
+ * ruby27.y: reject circular argument reference. (#622) (Ilya Bylich)
+ * ruby27.y: changed prefix of numparams to "_" (#620) (Ilya Bylich)
+
+v2.6.5.0 (2019-10-03)
+---------------------
+
+API modifications:
+ * Bump ruby versions to 2.4.9, 2.5.7 and 2.6.5. (#619) (Ilya Bylich)
+
+Features implemented:
+ * lexer.rl: changed max numparam to `@9` (#617) (Ilya Bylich)
+ * lexer.rl: support comments before leading dot in 27 mode. (#613) (Ilya Bylich)
+
+Bugs fixed:
+ * lexer.rl: emit tMETHREF as tDOT+tCOLON for rubies \< 27. (#614) (Ilya Bylich)
+
+v2.6.4.1 (2019-09-12)
+---------------------
+
+Bugs fixed:
+ * lexer.rl: fix parsing of 'm a + b do end' (#605) (Ilya Bylich)
+
+v2.6.4.0 (2019-08-30)
+---------------------
+
+API modifications:
+ * Added specs for heredocs with mixed encoding. (#581) (Ilya Bylich)
+
+Features implemented:
+ * ruby27.y: Revert "pipeline operator" (#601) (Koichi ITO)
+ * ruby27.y: Fix parsing of mutiple assignment with rescue modifier (#600) (Koichi ITO)
+ * ruby27.y: hoisted out f_rest_marg. (#594) (Ilya Bylich)
+ * ruby27.y: added pipeline operator. (#592) (Ilya Bylich)
+ * ruby27.y: reject safe navigator in LHS of mass-assignment. (#586) (Ilya Bylich)
+ * lexer.rl: reject whitespaces in meta and control chars. (#585) (Ilya Bylich)
+ * lexer.rl: Reject numparams as symbol literals. (#582) (Ilya Bylich)
+ * ruby27.y: Added numbered parameters support. (#565) (Ilya Bylich)
+ * lexer.rl: Reject \n and \r in heredoc identifiers starting from 2.7. (#575) (Ilya Bylich)
+
+Bugs fixed:
+ * ruby-parse: print empty string when --emit-json and empty input are given. (#590) (Ilya Bylich)
+ * AST_FORMAT: fixed documentation of the string with interpolation. (#589) (Ilya Bylich)
+ * builder.rb, processor.rb: Changed format of the procarg0 node. (#587) (Ilya Bylich)
+
 v2.6.3.0 (2019-04-28)
 ---------------------
 
@@ -966,4 +1072,3 @@ Bugs fixed:
  * lexer.rl: /= at expr_beg. (Peter Zotov)
  * lexer.rl: class\<\<self. (Peter Zotov)
  * fix lexing comments at expr_beg "{#1\n}". (Peter Zotov)
-

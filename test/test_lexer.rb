@@ -477,14 +477,18 @@ class TestLexer < Minitest::Test
   end
 
   def test_comment
-    assert_scanned("1 # one\n# two\n2",
-                   :tINTEGER, 1,   [0, 1],
-                   :tNL,      nil, [7, 8],
-                   :tINTEGER, 2,   [14, 15])
+    [26, 27].each do |version|
+      setup_lexer(version)
 
-    assert_equal 2, @lex.comments.length
-    assert_equal '# one', @lex.comments[0].text
-    assert_equal '# two', @lex.comments[1].text
+      assert_scanned("1 # one\n# two\n2",
+                     :tINTEGER, 1,   [0, 1],
+                     :tNL,      nil, [7, 8],
+                     :tINTEGER, 2,   [14, 15])
+
+      assert_equal 2, @lex.comments.length
+      assert_equal '# one', @lex.comments[0].text
+      assert_equal '# two', @lex.comments[1].text
+    end
   end
 
   def test_comment_expr_beg
@@ -1501,6 +1505,13 @@ class TestLexer < Minitest::Test
 
   def test_or2
     assert_scanned "||", :tOROP, "||", [0, 2]
+  end
+
+  def test_or2__after_27
+    setup_lexer(27)
+    assert_scanned("||",
+                   :tPIPE, "|", [0, 1],
+                   :tPIPE, "|", [1, 2])
   end
 
   def test_or2_equals
@@ -3558,47 +3569,6 @@ class TestLexer < Minitest::Test
                    :tIDENTIFIER, 're', [1, 3])
   end
 
-  def test_meth_ref
-    assert_scanned('foo.:bar',
-                  :tIDENTIFIER, 'foo', [0, 3],
-                  :tMETHREF,   '.:',   [3, 5],
-                  :tIDENTIFIER, 'bar', [5, 8])
-
-    assert_scanned('foo .:bar',
-                   :tIDENTIFIER, 'foo', [0, 3],
-                   :tMETHREF,   '.:',   [4, 6],
-                   :tIDENTIFIER, 'bar', [6, 9])
-  end
-
-  def test_meth_ref_unary_op
-    assert_scanned('foo.:+',
-                  :tIDENTIFIER, 'foo', [0, 3],
-                  :tMETHREF,    '.:',  [3, 5],
-                  :tPLUS,       '+',   [5, 6])
-
-    assert_scanned('foo.:-@',
-                  :tIDENTIFIER, 'foo', [0, 3],
-                  :tMETHREF,    '.:',  [3, 5],
-                  :tUMINUS,     '-@',  [5, 7])
-  end
-
-  def test_meth_ref_unsupported_newlines
-    # MRI emits exactly the same sequence of tokens,
-    # the error happens later in the parser
-
-    assert_scanned('foo. :+',
-                  :tIDENTIFIER, 'foo', [0, 3],
-                  :tDOT,        '.',   [3, 4],
-                  :tCOLON,      ':',   [5, 6],
-                  :tUPLUS,       '+',  [6, 7])
-
-    assert_scanned('foo.: +',
-                  :tIDENTIFIER, 'foo', [0, 3],
-                  :tDOT,        '.',   [3, 4],
-                  :tCOLON,      ':',   [4, 5],
-                  :tPLUS,       '+',   [6, 7])
-  end
-
   def lex_numbered_parameter(input)
     @lex.max_numparam_stack.push
 
@@ -3633,27 +3603,6 @@ class TestLexer < Minitest::Test
       assert_equal(err.diagnostic.location.begin_pos, 0)
       assert_equal(err.diagnostic.location.end_pos, input.length)
     end
-  end
-
-  def test_numbered_args_before_27
-    setup_lexer(26)
-    refute_scanned_numbered_parameter('@1')
-  end
-
-  def test_numbered_args_27
-    setup_lexer(27)
-    assert_scanned_numbered_parameter('@1')
-    assert_equal(@lex.max_numparam, 1)
-
-    setup_lexer(27)
-    assert_scanned_numbered_parameter('@100')
-    assert_equal(@lex.max_numparam, 100)
-
-    setup_lexer(27)
-    refute_scanned_numbered_parameter('@101', :too_large_numparam)
-
-    setup_lexer(27)
-    refute_scanned_numbered_parameter('@01', :leading_zero_in_numparam)
   end
 
 end

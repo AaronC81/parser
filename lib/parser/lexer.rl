@@ -89,16 +89,13 @@ class Parser::Lexer
 
   REGEXP_META_CHARACTERS = Regexp.union(*"\\$()*+.<>?[]^{|}".chars).freeze
 
-  NUMPARAM_MAX = 100
-
   attr_reader   :source_buffer
-  attr_reader   :max_numparam_stack
 
   attr_accessor :diagnostics
   attr_accessor :static_env
   attr_accessor :force_utf32
 
-  attr_accessor :cond, :cmdarg, :in_kwarg, :context
+  attr_accessor :cond, :cmdarg, :in_kwarg, :context, :command_start
 
   attr_accessor :tokens, :comments
 
@@ -172,16 +169,13 @@ class Parser::Lexer
     # If the lexer is in `command state' (aka expr_value)
     # at the entry to #advance, it will transition to expr_cmdarg
     # instead of expr_arg at certain points.
-    @command_state = false
+    @command_start = true
 
     # True at the end of "def foo a:"
     @in_kwarg      = false
 
     # State before =begin / =end block comment
     @cs_before_block_comment = self.class.lex_en_line_begin
-
-    # Maximum numbered parameters stack
-    @max_numparam_stack = MaxNumparamStack.new
   end
 
   def source_buffer=(source_buffer)
@@ -255,10 +249,6 @@ class Parser::Lexer
     @cond = @cond_stack.pop
   end
 
-  def max_numparam
-    @max_numparam_stack.top
-  end
-
   def dedent_level
     # We erase @dedent_level as a precaution to avoid accidentally
     # using a stale value.
@@ -287,8 +277,8 @@ class Parser::Lexer
     pe = @source_pts.size + 2
     p, eof = @p, pe
 
-    @command_state = (@cs == klass.lex_en_expr_value ||
-                      @cs == klass.lex_en_line_begin)
+    cmd_state = @command_start
+    @command_start = false
 
     %% write exec;
     # %
@@ -358,8 +348,8 @@ class Parser::Lexer
     end
   end
 
-  def arg_or_cmdarg
-    if @command_state
+  def arg_or_cmdarg(cmd_state)
+    if cmd_state
       self.class.lex_en_expr_cmdarg
     else
       self.class.lex_en_expr_arg
@@ -457,7 +447,7 @@ class Parser::Lexer
     '=>'  => :tASSOC,   '::'  => :tCOLON2,  '===' => :tEQQ,
     '<=>' => :tCMP,     '[]'  => :tAREF,    '[]=' => :tASET,
     '{'   => :tLCURLY,  '}'   => :tRCURLY,  '`'   => :tBACK_REF2,
-    '!@'  => :tBANG,    '&.'  => :tANDDOT,  '.:'  => :tMETHREF
+    '!@'  => :tBANG,    '&.'  => :tANDDOT,
   }
 
   PUNCTUATION_BEGIN = {
@@ -1029,6 +1019,20 @@ class Parser::Lexer
     fcall expr_variable;
   }
 
+  # Special case for Ruby > 2.7
+  # If interpolated instance/class variable starts with a digit we parse it as a plain substring
+  # However, "#$1" is still a regular interpolation
+  interp_digit_var = '#' ('@' | '@@') digit c_alpha*;
+
+  action extend_interp_digit_var {
+    if @version >= 27
+      literal.extend_string(tok, @ts, @te)
+    else
+      message = tok.start_with?('#@@') ? :cvar_name : :ivar_name
+      diagnostic :error, message, { :name => tok(@ts + 1, @te) }, range(@ts + 1, @te)
+    end
+  }
+
   # Interpolations with code blocks must match nested curly braces, as
   # interpolation ending is ambiguous with a block ending. So, every
   # opening and closing brace should be matched with e_[lr]brace rules,
@@ -1074,6 +1078,8 @@ class Parser::Lexer
         fbreak;
       end
     end
+
+    @paren_nest -= 1
   };
 
   action extend_interp_code {
@@ -1089,6 +1095,7 @@ class Parser::Lexer
     end
 
     current_literal.start_interp_brace
+    @command_start = true
     fnext expr_value;
     fbreak;
   }
@@ -1097,60 +1104,64 @@ class Parser::Lexer
   # above.
 
   interp_words := |*
-      interp_code => extend_interp_code;
-      interp_var  => extend_interp_var;
-      e_bs escape => extend_string_escaped;
-      c_space+    => extend_string_space;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      interp_code      => extend_interp_code;
+      interp_digit_var => extend_interp_digit_var;
+      interp_var       => extend_interp_var;
+      e_bs escape      => extend_string_escaped;
+      c_space+         => extend_string_space;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   interp_string := |*
-      interp_code => extend_interp_code;
-      interp_var  => extend_interp_var;
-      e_bs escape => extend_string_escaped;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      interp_code      => extend_interp_code;
+      interp_digit_var => extend_interp_digit_var;
+      interp_var       => extend_interp_var;
+      e_bs escape      => extend_string_escaped;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   plain_words := |*
-      e_bs c_any  => extend_string_escaped;
-      c_space+    => extend_string_space;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      e_bs c_any       => extend_string_escaped;
+      c_space+         => extend_string_space;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   plain_string := |*
-      '\\' c_nl   => extend_string_eol;
-      e_bs c_any  => extend_string_escaped;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      '\\' c_nl        => extend_string_eol;
+      e_bs c_any       => extend_string_escaped;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   interp_backslash_delimited := |*
-      interp_code => extend_interp_code;
-      interp_var  => extend_interp_var;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      interp_code      => extend_interp_code;
+      interp_digit_var => extend_interp_digit_var;
+      interp_var       => extend_interp_var;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   plain_backslash_delimited := |*
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   interp_backslash_delimited_words := |*
-      interp_code => extend_interp_code;
-      interp_var  => extend_interp_var;
-      c_space+    => extend_string_space;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      interp_code      => extend_interp_code;
+      interp_digit_var => extend_interp_digit_var;
+      interp_var       => extend_interp_var;
+      c_space+         => extend_string_space;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   plain_backslash_delimited_words := |*
-      c_space+    => extend_string_space;
-      c_eol       => extend_string_eol;
-      c_any       => extend_string;
+      c_space+         => extend_string_space;
+      c_eol            => extend_string_eol;
+      c_any            => extend_string;
   *|;
 
   regexp_modifiers := |*
@@ -1266,6 +1277,12 @@ class Parser::Lexer
 
   e_lbrack = '[' % {
     @cond.push(false); @cmdarg.push(false)
+
+    @paren_nest += 1
+  };
+
+  e_rbrack = ']' % {
+    @paren_nest -= 1
   };
 
   # Ruby 1.9 lambdas require parentheses counting in order to
@@ -1275,6 +1292,10 @@ class Parser::Lexer
     @cond.push(false); @cmdarg.push(false)
 
     @paren_nest += 1
+
+    if version?(18)
+      @command_start = true
+    end
   };
 
   e_rparen = ')' % {
@@ -1288,7 +1309,7 @@ class Parser::Lexer
     if !@static_env.nil? && @static_env.declared?(tok)
       fnext expr_endfn; fbreak;
     else
-      fnext *arg_or_cmdarg; fbreak;
+      fnext *arg_or_cmdarg(cmd_state); fbreak;
     end
   }
 
@@ -1316,36 +1337,6 @@ class Parser::Lexer
         end
 
         emit(:tCVAR)
-        fnext *stack_pop; fbreak;
-      };
-
-      '@' [0-9]+
-      => {
-        if @version < 27
-          diagnostic :error, :ivar_name, { :name => tok }
-        end
-
-        value = tok[1..-1]
-
-        if value[0] == '0'
-          diagnostic :error, :leading_zero_in_numparam, nil, range(@ts, @te)
-        end
-
-        if value.to_i > NUMPARAM_MAX
-          diagnostic :error, :too_large_numparam, nil, range(@ts, @te)
-        end
-
-        if !@context.in_block? && !@context.in_lambda?
-          diagnostic :error, :numparam_outside_block, nil, range(@ts, @te)
-        end
-
-        if !@max_numparam_stack.can_have_numparams?
-          diagnostic :error, :ordinary_param_defined, nil, range(@ts, @te)
-        end
-
-        @max_numparam_stack.register(value.to_i)
-
-        emit(:tNUMPARAM, tok[1..-1])
         fnext *stack_pop; fbreak;
       };
 
@@ -1445,15 +1436,15 @@ class Parser::Lexer
   expr_dot := |*
       constant
       => { emit(:tCONSTANT)
-           fnext *arg_or_cmdarg; fbreak; };
+           fnext *arg_or_cmdarg(cmd_state); fbreak; };
 
       call_or_var
       => { emit(:tIDENTIFIER)
-           fnext *arg_or_cmdarg; fbreak; };
+           fnext *arg_or_cmdarg(cmd_state); fbreak; };
 
       bareword ambiguous_fid_suffix
       => { emit(:tFID, tok(@ts, tm), @ts, tm)
-           fnext *arg_or_cmdarg; p = tm - 1; fbreak; };
+           fnext *arg_or_cmdarg(cmd_state); p = tm - 1; fbreak; };
 
       # See the comment in `expr_fname`.
       operator_fname      |
@@ -1513,6 +1504,8 @@ class Parser::Lexer
         else
           emit(:tLCURLY, '{'.freeze, @te - 1, @te)
         end
+        @command_start = true
+        @paren_nest += 1
         fnext expr_value; fbreak;
       };
 
@@ -1673,6 +1666,8 @@ class Parser::Lexer
         else
           emit(:tLBRACE_ARG, '{'.freeze)
         end
+        @paren_nest += 1
+        @command_start = true
         fnext expr_value; fbreak;
       };
 
@@ -1921,6 +1916,24 @@ class Parser::Lexer
       };
 
       #
+      # AMBIGUOUS EMPTY BLOCK ARGUMENTS
+      #
+
+      # Ruby >= 2.7 emits it as two tPIPE terminals
+      # while Ruby < 2.7 as a single tOROP (like in `a || b`)
+      '||'
+      => {
+        if @version >= 27
+          emit(:tPIPE, tok(@ts, @ts + 1), @ts, @ts + 1)
+          fhold;
+          fnext expr_beg; fbreak;
+        else
+          p -= 2
+          fgoto expr_end;
+        end
+      };
+
+      #
       # KEYWORDS AND PUNCTUATION
       #
 
@@ -1929,10 +1942,12 @@ class Parser::Lexer
       => {
         if @lambda_stack.last == @paren_nest
           @lambda_stack.pop
+          @command_start = true
           emit(:tLAMBEG, '{'.freeze)
         else
           emit(:tLBRACE, '{'.freeze)
         end
+        @paren_nest += 1
         fbreak;
       };
 
@@ -1961,6 +1976,7 @@ class Parser::Lexer
       # if a: Statement if.
       keyword_modifier
       => { emit_table(KEYWORDS_BEGIN)
+           @command_start = true
            fnext expr_value; fbreak; };
 
       #
@@ -1981,7 +1997,7 @@ class Parser::Lexer
           if !@static_env.nil? && @static_env.declared?(ident)
             fnext expr_end;
           else
-            fnext *arg_or_cmdarg;
+            fnext *arg_or_cmdarg(cmd_state);
           end
         else
           emit(:tLABEL, tok(@ts, @te - 2), @ts, @te - 1)
@@ -2150,6 +2166,10 @@ class Parser::Lexer
             emit_do
           end
         end
+        if tok == '{'.freeze
+          @paren_nest += 1
+        end
+        @command_start = true
 
         fnext expr_value; fbreak;
       };
@@ -2175,6 +2195,7 @@ class Parser::Lexer
       # elsif b:c: elsif b(:c)
       keyword_with_value
       => { emit_table(KEYWORDS)
+           @command_start = true
            fnext expr_value; fbreak; };
 
       keyword_with_mid
@@ -2198,7 +2219,7 @@ class Parser::Lexer
           emit(:tIDENTIFIER)
 
           unless !@static_env.nil? && @static_env.declared?(tok)
-            fnext *arg_or_cmdarg;
+            fnext *arg_or_cmdarg(cmd_state);
           end
         else
           emit(:k__ENCODING__, '__ENCODING__'.freeze)
@@ -2309,7 +2330,7 @@ class Parser::Lexer
 
       constant
       => { emit(:tCONSTANT)
-           fnext *arg_or_cmdarg; fbreak; };
+           fnext *arg_or_cmdarg(cmd_state); fbreak; };
 
       constant ambiguous_const_suffix
       => { emit(:tCONSTANT, tok(@ts, tm), @ts, tm)
@@ -2322,13 +2343,7 @@ class Parser::Lexer
       # METHOD CALLS
       #
 
-      '.:' w_space+
-      => { emit(:tDOT, '.', @ts, @ts + 1)
-           emit(:tCOLON, ':', @ts + 1, @ts + 2)
-           p = p - tok.length + 2
-           fnext expr_dot; fbreak; };
-
-      '.:' | '.' | '&.' | '::'
+      '.' | '&.' | '::'
       => { emit_table(PUNCTUATION)
            fnext expr_dot; fbreak; };
 
@@ -2358,18 +2373,6 @@ class Parser::Lexer
         fgoto expr_value;
       };
 
-      '|>'
-      => {
-        if @version >= 27
-          emit(:tPIPE2)
-          fnext expr_dot; fbreak;
-        else
-          emit(:tPIPE)
-          p -= 1
-          fnext expr_value; fbreak;
-        end
-      };
-
       # When '|', '~', '!', '=>' are used as operators
       # they do not accept any symbols (or quoted labels) after.
       # Other binary operators accept it.
@@ -2383,7 +2386,7 @@ class Parser::Lexer
       => { emit_table(PUNCTUATION)
            fnext expr_beg; fbreak; };
 
-      e_rbrace | e_rparen | ']'
+      e_rbrace | e_rparen | e_rbrack
       => {
         emit_table(PUNCTUATION)
 
@@ -2420,6 +2423,17 @@ class Parser::Lexer
       => { emit(:tLBRACK2, '['.freeze)
            fnext expr_beg; fbreak; };
 
+      '...' c_nl
+      => {
+        if @paren_nest == 0
+          diagnostic :warning, :triple_dot_at_eol, nil, range(@ts, @te - 1)
+        end
+
+        emit(:tDOT3, '...'.freeze, @ts, @te - 1)
+        fhold;
+        fnext expr_beg; fbreak;
+      };
+
       punctuation_end
       => { emit_table(PUNCTUATION)
            fnext expr_beg; fbreak; };
@@ -2435,6 +2449,7 @@ class Parser::Lexer
 
       ';'
       => { emit(:tSEMI, ';'.freeze)
+           @command_start = true
            fnext expr_value; fbreak; };
 
       '\\' c_line {
@@ -2453,8 +2468,26 @@ class Parser::Lexer
   leading_dot := |*
       # Insane leading dots:
       # a #comment
+      #  # post-2.7 comment
       #  .b: a.b
-      c_space* %{ tm = p } ('.' | '&.' | '|>')
+
+      # Here we use '\n' instead of w_newline to not modify @newline_s
+      # and eventually properly emit tNL
+      (c_space* w_space_comment '\n')+
+      => {
+        if @version < 27
+          # Ruby before 2.7 doesn't support comments before leading dot.
+          # If a line after "a" starts with a comment then "a" is a self-contained statement.
+          # So in that case we emit a special tNL token and start reading the
+          # next line as a separate statement.
+          #
+          # Note: block comments before leading dot are not supported on any version of Ruby.
+          emit(:tNL, nil, @newline_s, @newline_s + 1)
+          fhold; fnext line_begin; fbreak;
+        end
+      };
+
+      c_space* %{ tm = p } ('.' | '&.')
       => { p = tm - 1; fgoto expr_end; };
 
       any
@@ -2493,7 +2526,7 @@ class Parser::Lexer
       => { p = pe - 3 };
 
       c_any
-      => { fhold; fgoto expr_value; };
+      => { cmd_state = true; fhold; fgoto expr_value; };
 
       c_eof => do_eof;
   *|;

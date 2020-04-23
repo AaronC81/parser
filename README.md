@@ -24,10 +24,11 @@ below for explanation of `emit_*` calls):
 
     require 'parser/current'
     # opt-in to most recent AST format:
-    Parser::Builders::Default.emit_lambda   = true
-    Parser::Builders::Default.emit_procarg0 = true
-    Parser::Builders::Default.emit_encoding = true
-    Parser::Builders::Default.emit_index    = true
+    Parser::Builders::Default.emit_lambda              = true
+    Parser::Builders::Default.emit_procarg0            = true
+    Parser::Builders::Default.emit_encoding            = true
+    Parser::Builders::Default.emit_index               = true
+    Parser::Builders::Default.emit_arg_inside_procarg0 = true
 
 Parse a chunk of code:
 
@@ -234,7 +235,7 @@ Parser implements the MacRuby 0.12 and RubyMotion mid-2015 parsers precisely. Ho
 
 ## Known issues
 
-Adding support for the following Ruby MRI features in Parser would needlessly complicate it, and as they all are very specific and rarely occuring corner cases, this is not done.
+Adding support for the following Ruby MRI features in Parser would needlessly complicate it, and as they all are very specific and rarely occurring corner cases, this is not done.
 
 Parser has been extensively tested; in particular, it parses almost entire [Rubygems][rg] corpus. For every issue, a breakdown of affected gems is offered.
 
@@ -268,6 +269,13 @@ to specify a global variable named `$-`. Ruby 2.1 and later treat it as a syntax
 follows 2.1 behavior.
 
 No known code is affected by this issue.
+
+### EOF characters after embedded documents before 2.7
+
+Code like `"=begin\n""=end\0"` is invalid for all versions of Ruby before 2.7. Ruby 2.7 and later parses it
+normally. Parser follows 2.7 behavior.
+
+It is unknown whether any gems are affected by this issue.
 
 ## Contributors
 
