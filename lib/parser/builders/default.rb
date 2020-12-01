@@ -80,6 +80,8 @@ module Parser
       attr_accessor :emit_index
     end
 
+    @emit_index = false
+
     class << self
       ##
       # AST compatibility attribute; causes a single non-mlhs
@@ -95,7 +97,84 @@ module Parser
       attr_accessor :emit_arg_inside_procarg0
     end
 
-    @emit_index = false
+    @emit_arg_inside_procarg0 = false
+
+    class << self
+      ##
+      # AST compatibility attribute; arguments forwarding initially
+      # didn't have support for leading arguments
+      # (i.e. `def m(a, ...); end` was a syntax error). However, Ruby 3.0
+      # added support for any number of arguments in front of the `...`.
+      #
+      # If set to false (the default):
+      #   1. `def m(...) end` is emitted as
+      #      s(:def, :m, s(:forward_args), nil)
+      #   2. `def m(a, b, ...) end` is emitted as
+      #      s(:def, :m,
+      #        s(:args, s(:arg, :a), s(:arg, :b), s(:forward_arg)))
+      #
+      # If set to true it uses a single format:
+      #   1. `def m(...) end` is emitted as
+      #      s(:def, :m, s(:args, s(:forward_arg)))
+      #   2. `def m(a, b, ...) end` is emitted as
+      #      s(:def, :m, s(:args, s(:arg, :a), s(:arg, :b), s(:forward_arg)))
+      #
+      # It does't matter that much on 2.7 (because there can't be any leading arguments),
+      # but on 3.0 it should be better enabled to use a single AST format.
+      #
+      # @return [Boolean]
+      attr_accessor :emit_forward_arg
+    end
+
+    @emit_forward_arg = false
+
+    class << self
+      ##
+      # AST compatibility attribute; Starting from Ruby 2.7 keyword arguments
+      # of method calls that are passed explicitly as a hash (i.e. with curly braces)
+      # are treated as positional arguments and Ruby 2.7 emits a warning on such method
+      # call. Ruby 3.0 given an ArgumentError.
+      #
+      # If set to false (the default) the last hash argument is emitted as `hash`:
+      #
+      # ```
+      # (send nil :foo
+      #   (hash
+      #     (pair
+      #       (sym :bar)
+      #       (int 42))))
+      # ```
+      #
+      # If set to true it is emitted as `kwargs`:
+      #
+      # ```
+      # (send nil :foo
+      #   (kwargs
+      #     (pair
+      #       (sym :bar)
+      #       (int 42))))
+      # ```
+      #
+      # Note that `kwargs` node is just a replacement for `hash` argument,
+      # so if there's are multiple arguments (or a `kwsplat`) all of them
+      # are wrapped into `kwargs` instead of `hash`:
+      #
+      # ```
+      # (send nil :foo
+      #   (hash
+      #     (pair
+      #       (sym :a)
+      #       (int 42))
+      #     (kwsplat
+      #       (send nil :b))
+      #     (pair
+      #       (sym :c)
+      #       (int 10))))
+      # ```
+      attr_accessor :emit_kwargs
+    end
+
+    @emit_kwargs = false
 
     class << self
       ##
@@ -106,6 +185,8 @@ module Parser
         @emit_encoding = true
         @emit_index = true
         @emit_arg_inside_procarg0 = true
+        @emit_forward_arg = true
+        @emit_kwargs = true
       end
     end
 
@@ -557,7 +638,11 @@ module Parser
       when :ident
         name, = *node
 
-        check_assignment_to_numparam(node)
+        var_name = node.children[0].to_s
+        name_loc = node.loc.expression
+
+        check_assignment_to_numparam(var_name, name_loc)
+        check_reserved_for_numparam(var_name, name_loc)
 
         @parser.static_env.declare(name)
 
@@ -648,23 +733,38 @@ module Parser
 
     def def_method(def_t, name_t, args,
                    body, end_t)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:def, [ value(name_t).to_sym, args, body ],
         definition_map(def_t, nil, name_t, end_t))
+    end
+
+    def def_endless_method(def_t, name_t, args,
+                           assignment_t, body)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
+      n(:def, [ value(name_t).to_sym, args, body ],
+        endless_definition_map(def_t, nil, name_t, assignment_t, body))
     end
 
     def def_singleton(def_t, definee, dot_t,
                       name_t, args,
                       body, end_t)
-      case definee.type
-      when :int, :str, :dstr, :sym, :dsym,
-           :regexp, :array, :hash
+      validate_definee(definee)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
 
-        diagnostic :error, :singleton_literal, nil, definee.loc.expression
+      n(:defs, [ definee, value(name_t).to_sym, args, body ],
+        definition_map(def_t, dot_t, name_t, end_t))
+    end
 
-      else
-        n(:defs, [ definee, value(name_t).to_sym, args, body ],
-          definition_map(def_t, dot_t, name_t, end_t))
-      end
+    def def_endless_singleton(def_t, definee, dot_t,
+                              name_t, args,
+                              assignment_t, body)
+      validate_definee(definee)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
+      n(:defs, [ definee, value(name_t).to_sym, args, body ],
+        endless_definition_map(def_t, dot_t, name_t, assignment_t, body))
     end
 
     def undef_method(undef_t, names)
@@ -693,16 +793,30 @@ module Parser
       n(:numargs, [ max_numparam ], nil)
     end
 
-    def forward_args(begin_t, dots_t, end_t)
-      n(:forward_args, [], collection_map(begin_t, token_map(dots_t), end_t))
+    def forward_only_args(begin_t, dots_t, end_t)
+      if self.class.emit_forward_arg
+        arg = forward_arg(dots_t)
+        n(:args, [ arg ],
+          collection_map(begin_t, [ arg ], end_t))
+      else
+        n(:forward_args, [], collection_map(begin_t, token_map(dots_t), end_t))
+      end
+    end
+
+    def forward_arg(dots_t)
+      n(:forward_arg, [], token_map(dots_t))
     end
 
     def arg(name_t)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:arg, [ value(name_t).to_sym ],
         variable_map(name_t))
     end
 
     def optarg(name_t, eql_t, value)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:optarg, [ value(name_t).to_sym, value ],
         variable_map(name_t).
           with_operator(loc(eql_t)).
@@ -711,6 +825,7 @@ module Parser
 
     def restarg(star_t, name_t=nil)
       if name_t
+        check_reserved_for_numparam(value(name_t), loc(name_t))
         n(:restarg, [ value(name_t).to_sym ],
           arg_prefix_map(star_t, name_t))
       else
@@ -720,17 +835,23 @@ module Parser
     end
 
     def kwarg(name_t)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:kwarg, [ value(name_t).to_sym ],
         kwarg_map(name_t))
     end
 
     def kwoptarg(name_t, value)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:kwoptarg, [ value(name_t).to_sym, value ],
         kwarg_map(name_t, value))
     end
 
     def kwrestarg(dstar_t, name_t=nil)
       if name_t
+        check_reserved_for_numparam(value(name_t), loc(name_t))
+
         n(:kwrestarg, [ value(name_t).to_sym ],
           arg_prefix_map(dstar_t, name_t))
       else
@@ -745,11 +866,15 @@ module Parser
     end
 
     def shadowarg(name_t)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:shadowarg, [ value(name_t).to_sym ],
         variable_map(name_t))
     end
 
     def blockarg(amper_t, name_t)
+      check_reserved_for_numparam(value(name_t), loc(name_t))
+
       n(:blockarg, [ value(name_t).to_sym ],
         arg_prefix_map(amper_t, name_t))
     end
@@ -853,6 +978,11 @@ module Parser
     def call_method(receiver, dot_t, selector_t,
                     lparen_t=nil, args=[], rparen_t=nil)
       type = call_type_for_dot(dot_t)
+
+      if self.class.emit_kwargs
+        rewrite_hash_args_to_kwargs(args)
+      end
+
       if selector_t.nil?
         n(type, [ receiver, :call, *args ],
           send_map(receiver, dot_t, nil, lparen_t, args, rparen_t))
@@ -930,6 +1060,10 @@ module Parser
     end
 
     def index(receiver, lbrack_t, indexes, rbrack_t)
+      if self.class.emit_kwargs
+        rewrite_hash_args_to_kwargs(indexes)
+      end
+
       if self.class.emit_index
         n(:index, [ receiver, *indexes ],
           index_map(receiver, lbrack_t, rbrack_t))
@@ -1092,6 +1226,10 @@ module Parser
         end
       end
 
+      if %i[yield super].include?(type) && self.class.emit_kwargs
+        rewrite_hash_args_to_kwargs(args)
+      end
+
       n(type, args,
         keyword_map(keyword_t, lparen_t, args, rparen_t))
     end
@@ -1241,8 +1379,10 @@ module Parser
 
     def match_var(name_t)
       name = value(name_t).to_sym
+      name_l = loc(name_t)
 
-      check_duplicate_pattern_variable(name, loc(name_t))
+      check_lvar_name(name, name_l)
+      check_duplicate_pattern_variable(name, name_l)
       @parser.static_env.declare(name)
 
       n(:match_var, [ name ],
@@ -1255,6 +1395,7 @@ module Parser
       expr_l = loc(name_t)
       name_l = expr_l.adjust(end_pos: -1)
 
+      check_lvar_name(name, name_l)
       check_duplicate_pattern_variable(name, name_l)
       @parser.static_env.declare(name)
 
@@ -1295,6 +1436,9 @@ module Parser
           Source::Map::Variable.new(name_l, expr_l))
       when :begin
         match_hash_var_from_str(begin_t, string.children, end_t)
+      else
+        # we only can get here if there is an interpolation, e.g., ``in "#{ a }":`
+        diagnostic :error, :pm_interp_in_var_name, nil, loc(begin_t).join(loc(end_t))
       end
     end
 
@@ -1333,6 +1477,11 @@ module Parser
       node_type = trailing_comma ? :array_pattern_with_tail : :array_pattern
 
       n(node_type, node_elements,
+        collection_map(lbrack_t, elements, rbrack_t))
+    end
+
+    def find_pattern(lbrack_t, elements, rbrack_t)
+      n(:find_pattern, elements,
         collection_map(lbrack_t, elements, rbrack_t))
     end
 
@@ -1491,8 +1640,10 @@ module Parser
       end
     end
 
-    def check_assignment_to_numparam(node)
-      name = node.children[0].to_s
+    def check_assignment_to_numparam(name, loc)
+      # MRI < 2.7 treats numbered parameters as regular variables
+      # and so it's allowed to perform assignments like `_1 = 42`.
+      return if @parser.version < 27
 
       assigning_to_numparam =
         @parser.context.in_dynamic_block? &&
@@ -1500,7 +1651,17 @@ module Parser
         @parser.max_numparam_stack.has_numparams?
 
       if assigning_to_numparam
-        diagnostic :error, :cant_assign_to_numparam, { :name => name }, node.loc.expression
+        diagnostic :error, :cant_assign_to_numparam, { :name => name }, loc
+      end
+    end
+
+    def check_reserved_for_numparam(name, loc)
+      # MRI < 3.0 accepts assignemnt to variables like _1
+      # if it's not a numbererd parameter. MRI 3.0 and newer throws an error.
+      return if @parser.version < 30
+
+      if name =~ /\A_([1-9])\z/
+        diagnostic :error, :reserved_for_numparam, { :name => name }, loc
       end
     end
 
@@ -1734,9 +1895,17 @@ module Parser
     end
 
     def definition_map(keyword_t, operator_t, name_t, end_t)
-      Source::Map::Definition.new(loc(keyword_t),
-                                  loc(operator_t), loc(name_t),
-                                  loc(end_t))
+      Source::Map::MethodDefinition.new(loc(keyword_t),
+                                        loc(operator_t), loc(name_t),
+                                        loc(end_t), nil, nil)
+    end
+
+    def endless_definition_map(keyword_t, operator_t, name_t, assignment_t, body_e)
+      body_l = body_e.loc.expression
+
+      Source::Map::MethodDefinition.new(loc(keyword_t),
+                                        loc(operator_t), loc(name_t), nil,
+                                        loc(assignment_t), body_l)
     end
 
     def send_map(receiver_e, dot_t, selector_t, begin_t=nil, args=[], end_t=nil)
@@ -1980,6 +2149,32 @@ module Parser
       if type == :error
         @parser.send :yyerror
       end
+    end
+
+    def validate_definee(definee)
+      case definee.type
+      when :int, :str, :dstr, :sym, :dsym,
+           :regexp, :array, :hash
+
+        diagnostic :error, :singleton_literal, nil, definee.loc.expression
+        false
+      else
+        true
+      end
+    end
+
+    def rewrite_hash_args_to_kwargs(args)
+      if args.any? && kwargs?(args.last)
+        # foo(..., bar: baz)
+        args[args.length - 1] = args[args.length - 1].updated(:kwargs)
+      elsif args.length > 1 && args.last.type == :block_pass && kwargs?(args[args.length - 2])
+        # foo(..., bar: baz, &blk)
+        args[args.length - 2] = args[args.length - 2].updated(:kwargs)
+      end
+    end
+
+    def kwargs?(node)
+      node.type == :hash && node.loc.begin.nil? && node.loc.end.nil?
     end
   end
 

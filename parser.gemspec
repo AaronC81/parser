@@ -20,32 +20,16 @@ Gem::Specification.new do |spec|
     'source_code_uri' => "https://github.com/whitequark/parser/tree/v#{spec.version}"
   }
 
-  spec.files         = `git ls-files`.split + %w(
-                          lib/parser/lexer.rb
-                          lib/parser/ruby18.rb
-                          lib/parser/ruby19.rb
-                          lib/parser/ruby20.rb
-                          lib/parser/ruby21.rb
-                          lib/parser/ruby22.rb
-                          lib/parser/ruby23.rb
-                          lib/parser/ruby24.rb
-                          lib/parser/ruby25.rb
-                          lib/parser/ruby26.rb
-                          lib/parser/ruby27.rb
-                          lib/parser/ruby28.rb
-                          lib/parser/macruby.rb
-                          lib/parser/rubymotion.rb
-                       )
+  spec.files         = Dir['bin/*', 'lib/**/*.rb', 'parser.gemspec', 'LICENSE.txt']
   spec.executables   = spec.files.grep(%r{^bin/}) { |f| File.basename(f) }
-  spec.test_files    = spec.files.grep(%r{^test/})
   spec.require_paths = ['lib']
 
   spec.required_ruby_version = '>= 2.0.0'
 
-  spec.add_dependency             'ast',       '~> 2.4.0'
+  spec.add_dependency             'ast',       '~> 2.4.1'
 
   spec.add_development_dependency 'bundler',   '>= 1.15', '< 3.0.0'
-  spec.add_development_dependency 'rake',      '~> 10.0'
+  spec.add_development_dependency 'rake',      '~> 13.0.1'
   spec.add_development_dependency 'racc',      '= 1.4.15'
   spec.add_development_dependency 'cliver',    '~> 0.3.2'
 

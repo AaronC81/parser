@@ -11,7 +11,7 @@ task :default => [:test]
 Rake::TestTask.new do |t|
   t.libs       = %w(test/ lib/)
   t.test_files = FileList["test/**/test_*.rb"]
-  t.warning    = false
+  t.warning    = true
 end
 
 task :test_cov do
@@ -32,7 +32,7 @@ GENERATED_FILES = %w(lib/parser/lexer.rb
                      lib/parser/ruby25.rb
                      lib/parser/ruby26.rb
                      lib/parser/ruby27.rb
-                     lib/parser/ruby28.rb
+                     lib/parser/ruby30.rb
                      lib/parser/macruby.rb
                      lib/parser/rubymotion.rb)
 

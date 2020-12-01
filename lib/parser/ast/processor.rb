@@ -20,6 +20,7 @@ module Parser
       alias on_array    process_regular_node
       alias on_pair     process_regular_node
       alias on_hash     process_regular_node
+      alias on_kwargs   process_regular_node
       alias on_irange   process_regular_node
       alias on_erange   process_regular_node
 
@@ -124,6 +125,7 @@ module Parser
       alias on_kwarg          process_argument_node
       alias on_kwoptarg       process_argument_node
       alias on_kwrestarg      process_argument_node
+      alias on_forward_arg    process_argument_node
 
       def on_procarg0(node)
         if node.children[0].is_a?(Symbol)
@@ -250,6 +252,7 @@ module Parser
       alias on_array_pattern_with_tail process_regular_node
       alias on_hash_pattern            process_regular_node
       alias on_const_pattern           process_regular_node
+      alias on_find_pattern            process_regular_node
 
       # @private
       def process_variable_node(node)

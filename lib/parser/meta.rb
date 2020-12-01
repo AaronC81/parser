@@ -7,7 +7,7 @@ module Parser
     # All node types that parser can produce. Not all parser versions
     # will be able to produce every possible node.
     NODE_TYPES =
-      %w(
+      %i(
         true false nil int float str dstr
         sym dsym xstr regopt regexp array splat
         pair kwsplat hash irange erange self
@@ -23,16 +23,16 @@ module Parser
         until_post for break next redo return resbody
         kwbegin begin retry preexe postexe iflipflop eflipflop
         shadowarg complex rational __FILE__ __LINE__ __ENCODING__
-        ident root lambda indexasgn index procarg0
+        ident lambda indexasgn index procarg0
         restarg_expr blockarg_expr
         objc_kwarg objc_restarg objc_varargs
-        numargs numblock forward_args forwarded_args
+        numargs numblock forward_args forwarded_args forward_arg
         case_match in_match in_pattern
         match_var pin match_alt match_as match_rest
         array_pattern match_with_trailing_comma array_pattern_with_tail
         hash_pattern const_pattern if_guard unless_guard match_nil_pattern
-        empty_else
-      ).map(&:to_sym).to_set.freeze
+        empty_else find_pattern kwargs
+      ).to_set.freeze
 
   end # Meta
 end # Parser

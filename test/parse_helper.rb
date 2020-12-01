@@ -7,7 +7,7 @@ module ParseHelper
   require 'parser/macruby'
   require 'parser/rubymotion'
 
-  ALL_VERSIONS = %w(1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 2.8 mac ios)
+  ALL_VERSIONS = %w(1.8 1.9 2.0 2.1 2.2 2.3 2.4 2.5 2.6 2.7 3.0 mac ios)
 
   def setup
     @diagnostics = []
@@ -27,7 +27,7 @@ module ParseHelper
     when '2.5' then parser = Parser::Ruby25.new
     when '2.6' then parser = Parser::Ruby26.new
     when '2.7' then parser = Parser::Ruby27.new
-    when '2.8' then parser = Parser::Ruby28.new
+    when '3.0' then parser = Parser::Ruby30.new
     when 'mac' then parser = Parser::MacRuby.new
     when 'ios' then parser = Parser::RubyMotion.new
     else raise "Unrecognized Ruby version #{version}"
@@ -49,15 +49,17 @@ module ParseHelper
     end
   end
 
-  def assert_source_range(begin_pos, end_pos, range, version, what)
-    assert range.is_a?(Parser::Source::Range),
-           "(#{version}) #{range.inspect}.is_a?(Source::Range) for #{what}"
-
-    assert_equal begin_pos, range.begin_pos,
-                 "(#{version}) begin of #{what}"
-
-    assert_equal end_pos, range.end_pos,
-                 "(#{version}) end of #{what}"
+  def assert_source_range(expect_range, range, version, what)
+    if expect_range == nil
+      # Avoid "Use assert_nil if expecting nil from .... This will fail in Minitest 6.""
+      assert_nil range,
+                   "(#{version}) range of #{what}"
+    else
+      assert range.is_a?(Parser::Source::Range),
+             "(#{version}) #{range.inspect}.is_a?(Source::Range) for #{what}"
+      assert_equal expect_range, range.to_range,
+                   "(#{version}) range of #{what}"
+    end
   end
 
   # Use like this:
@@ -82,11 +84,28 @@ module ParseHelper
       parser.instance_eval { @lexer.force_utf32 = true }
       try_parsing(ast, code, parser, source_maps, version)
     end
+
+    # Also check that it doesn't throw anything
+    # except (possibly) Parser::SyntaxError on other versions of Ruby
+    with_versions(ALL_VERSIONS - versions) do |version, parser|
+      begin
+        source_file = Parser::Source::Buffer.new('(assert_older_rubies)', source: code)
+        parser.parse(source_file)
+      rescue Parser::SyntaxError
+        # ok
+      rescue StandardError
+        # unacceptable
+        raise
+      else
+        # No error means that `code` is valid for `version`, but has a different meaning.
+        # Sometimes Ruby has breaking changes (like numparams)
+        # that re-use constructions from previous versions.
+      end
+    end
   end
 
   def try_parsing(ast, code, parser, source_maps, version)
-    source_file = Parser::Source::Buffer.new('(assert_parses)')
-    source_file.source = code
+    source_file = Parser::Source::Buffer.new('(assert_parses)', source: code)
 
     begin
       parsed_ast = parser.parse(source_file)
@@ -106,8 +125,7 @@ module ParseHelper
     assert_equal ast, parsed_ast,
                  "(#{version}) AST equality"
 
-    parse_source_map_descriptions(source_maps) \
-        do |begin_pos, end_pos, map_field, ast_path, line|
+    parse_source_map_descriptions(source_maps) do |range, map_field, ast_path, line|
 
       astlet = traverse_ast(parsed_ast, ast_path)
 
@@ -121,9 +139,9 @@ module ParseHelper
       assert astlet.location.respond_to?(map_field),
              "(#{version}) #{astlet.location.inspect}.respond_to?(#{map_field.inspect}) for:\n#{parsed_ast.inspect}"
 
-      range = astlet.location.send(map_field)
+      found_range = astlet.location.send(map_field)
 
-      assert_source_range(begin_pos, end_pos, range, version, line.inspect)
+      assert_source_range(range, found_range, version, line.inspect)
     end
 
     assert parser.instance_eval { @lexer }.cmdarg.empty?,
@@ -143,8 +161,7 @@ module ParseHelper
   # ~~~
   def assert_diagnoses(diagnostic, code, source_maps='', versions=ALL_VERSIONS)
     with_versions(versions) do |version, parser|
-      source_file = Parser::Source::Buffer.new('(assert_diagnoses)')
-      source_file.source = code
+      source_file = Parser::Source::Buffer.new('(assert_diagnoses)', source: code)
 
       begin
         parser = parser.parse(source_file)
@@ -160,26 +177,25 @@ module ParseHelper
 
       level, reason, arguments = diagnostic
       arguments ||= {}
-      message     = Parser::MESSAGES[reason] % arguments
+      message     = Parser::Messages.compile(reason, arguments)
 
       assert_equal level, emitted_diagnostic.level
       assert_equal reason, emitted_diagnostic.reason
       assert_equal arguments, emitted_diagnostic.arguments
       assert_equal message, emitted_diagnostic.message
 
-      parse_source_map_descriptions(source_maps) \
-          do |begin_pos, end_pos, map_field, ast_path, line|
+      parse_source_map_descriptions(source_maps) do |range, map_field, ast_path, line|
 
         case map_field
         when 'location'
-          assert_source_range begin_pos, end_pos,
+          assert_source_range range,
                               emitted_diagnostic.location,
                               version, 'location'
 
         when 'highlights'
           index = ast_path.first.to_i
 
-          assert_source_range begin_pos, end_pos,
+          assert_source_range range,
                               emitted_diagnostic.highlights[index],
                               version, "#{index}th highlight"
 
@@ -202,8 +218,7 @@ module ParseHelper
   # ~~~
   def assert_diagnoses_many(diagnostics, code, versions=ALL_VERSIONS)
     with_versions(versions) do |version, parser|
-      source_file = Parser::Source::Buffer.new('(assert_diagnoses_many)')
-      source_file.source = code
+      source_file = Parser::Source::Buffer.new('(assert_diagnoses_many)', source: code)
 
       begin
         parser = parser.parse(source_file)
@@ -216,7 +231,7 @@ module ParseHelper
       diagnostics.zip(@diagnostics) do |expected_diagnostic, actual_diagnostic|
         level, reason, arguments = expected_diagnostic
         arguments ||= {}
-        message     = Parser::MESSAGES[reason] % arguments
+        message     = Parser::Messages.compile(reason, arguments)
 
         assert_equal level, actual_diagnostic.level
         assert_equal reason, actual_diagnostic.reason
@@ -228,8 +243,7 @@ module ParseHelper
 
   def refute_diagnoses(code, versions=ALL_VERSIONS)
     with_versions(versions) do |version, parser|
-      source_file = Parser::Source::Buffer.new('(refute_diagnoses)')
-      source_file.source = code
+      source_file = Parser::Source::Buffer.new('(refute_diagnoses)', source: code)
 
       begin
         parser = parser.parse(source_file)
@@ -245,23 +259,22 @@ module ParseHelper
 
   def assert_context(context, code, versions=ALL_VERSIONS)
     with_versions(versions) do |version, parser|
-      source_file = Parser::Source::Buffer.new('(assert_context)')
-      source_file.source = code
+      source_file = Parser::Source::Buffer.new('(assert_context)', source: code)
 
-      begin
-        parser.parse(source_file)
-      rescue Parser::SyntaxError
-        # do nothing; the diagnostic was reported
-      end
+      parsed_ast = parser.parse(source_file)
 
-      assert_equal parser.context.stack, context, "(#{version}) parsing context"
+      nodes = find_matching_nodes(parsed_ast) { |node| node.type == :send && node.children[1] == :get_context }
+      assert_equal 1, nodes.count, "there must exactly 1 `get_context()` call"
+
+      node = nodes.first
+      assert_equal context, node.context, "(#{version}) expect parsing context to match"
     end
   end
 
   SOURCE_MAP_DESCRIPTION_RE =
       /(?x)
        ^(?# $1 skip)            ^(\s*)
-        (?# $2 highlight)        ([~\^]+)
+        (?# $2 highlight)        ([~\^]+|\!)
                                  \s+
         (?# $3 source_map_field) ([a-z_]+)
         (?# $5 ast_path)         (\s+\(([a-z_.\/0-9]+)\))?
@@ -279,8 +292,11 @@ module ParseHelper
       next if line.empty?
 
       if (match = SOURCE_MAP_DESCRIPTION_RE.match(line))
-        begin_pos        = match[1].length
-        end_pos          = begin_pos + match[2].length
+        if match[2] != '!'
+          begin_pos        = match[1].length
+          end_pos          = begin_pos + match[2].length
+          range            = begin_pos...end_pos
+        end
         source_map_field = match[3]
 
         if match[5]
@@ -289,7 +305,7 @@ module ParseHelper
           ast_path = []
         end
 
-        yield begin_pos, end_pos, source_map_field, ast_path, line
+        yield range, source_map_field, ast_path, line
       else
         raise "Cannot parse source map description line: #{line.inspect}."
       end
@@ -316,5 +332,15 @@ module ParseHelper
 
       matching_children[index]
     end
+  end
+
+  def find_matching_nodes(ast, &block)
+    return [] unless ast.is_a?(AST::Node)
+
+    result = []
+    result << ast if block.call(ast)
+    ast.children.each { |child| result += find_matching_nodes(child, &block) }
+
+    result
   end
 end

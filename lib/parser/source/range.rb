@@ -13,7 +13,7 @@ module Parser
     #        ^^
     #
     # @!attribute [r] source_buffer
-    #  @return [Parser::Diagnostic::Engine]
+    #  @return [Parser::Source::Buffer]
     #
     # @!attribute [r] begin_pos
     #  @return [Integer] index of the first character in the range
@@ -112,11 +112,11 @@ module Parser
       # @raise RangeError
       #
       def column_range
-        if self.begin.line != self.end.line
+        if line != last_line
           raise RangeError, "#{self.inspect} spans more than one line"
         end
 
-        self.begin.column...self.end.column
+        column...last_column
       end
 
       ##
@@ -147,6 +147,13 @@ module Parser
       #
       def to_a
         (@begin_pos...@end_pos).to_a
+      end
+
+      ##
+      # @return [Range] a Ruby range with the same `begin_pos` and `end_pos`
+      #
+      def to_range
+        self.begin_pos...self.end_pos
       end
 
       ##

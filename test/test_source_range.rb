@@ -4,8 +4,8 @@ require 'helper'
 
 class TestSourceRange < Minitest::Test
   def setup
-    @buf = Parser::Source::Buffer.new('(string)')
-    @buf.source = "foobar\nbaz"
+    @buf = Parser::Source::Buffer.new('(string)',
+      source: "foobar\nbaz")
     @sr1_3 = Parser::Source::Range.new(@buf, 1, 3)
     @sr2_2 = Parser::Source::Range.new(@buf, 2, 2)
     @sr3_3 = Parser::Source::Range.new(@buf, 3, 3)
@@ -95,15 +95,15 @@ class TestSourceRange < Minitest::Test
 
   def test_order
     assert_equal  0, @sr1_3 <=> @sr1_3
-    assert_equal -1, @sr1_3 <=> @sr5_8
-    assert_equal -1, @sr2_2 <=> @sr2_6
-    assert_equal +1, @sr2_6 <=> @sr2_2
+    assert_equal(-1, @sr1_3 <=> @sr5_8)
+    assert_equal(-1, @sr2_2 <=> @sr2_6)
+    assert_equal(+1, @sr2_6 <=> @sr2_2)
 
-    assert_equal -1, @sr1_3 <=> @sr2_6
+    assert_equal(-1, @sr1_3 <=> @sr2_6)
 
-    assert_equal +1, @sr2_2 <=> @sr1_3
-    assert_equal -1, @sr1_3 <=> @sr2_2
-    assert_equal -1, @sr5_7 <=> @sr5_8
+    assert_equal(+1, @sr2_2 <=> @sr1_3)
+    assert_equal(-1, @sr1_3 <=> @sr2_2)
+    assert_equal(-1, @sr5_7 <=> @sr5_8)
 
     assert_nil @sr1_3 <=> Parser::Source::Range.new(@buf.dup, 1, 3)
     assert_nil @sr1_3 <=> 4
@@ -155,6 +155,11 @@ class TestSourceRange < Minitest::Test
     refute sr.is?('bar')
   end
 
+  def test_to_range
+    sr = Parser::Source::Range.new(@buf, 10, 20)
+    assert_equal (10...20), sr.to_range
+  end
+
   def test_to_s
     sr = Parser::Source::Range.new(@buf, 8, 9)
     assert_equal '(string):2:2', sr.to_s
@@ -178,8 +183,8 @@ class TestSourceRange < Minitest::Test
     assert_equal true, @sr1_3.eql?(also_1_3)
     assert_equal @sr1_3.hash, also_1_3.hash
 
-    buf2 = Parser::Source::Buffer.new('(string)')
-    buf2.source = "foobar\nbaz"
+    buf2 = Parser::Source::Buffer.new('(string)',
+      source: "foobar\nbaz")
     from_other_buf = Parser::Source::Range.new(buf2, 1, 3)
     assert_equal false, @sr1_3.eql?(from_other_buf)
     assert @sr1_3.hash != from_other_buf.hash

@@ -29,7 +29,7 @@ class TestParser < Minitest::Test
   SINCE_2_5 = SINCE_2_4 - %w(2.4)
   SINCE_2_6 = SINCE_2_5 - %w(2.5)
   SINCE_2_7 = SINCE_2_6 - %w(2.6)
-  SINCE_2_8 = SINCE_2_7 - %w(2.7)
+  SINCE_3_0 = SINCE_2_7 - %w(2.7)
 
   # Guidelines for test naming:
   #  * Test structure follows structure of AST_FORMAT.md.
@@ -1856,6 +1856,7 @@ class TestParser < Minitest::Test
       %q{def foo; end},
       %q{~~~ keyword
         |    ~~~ name
+        |! assignment
         |         ~~~ end})
 
     assert_parses(
@@ -1976,7 +1977,9 @@ class TestParser < Minitest::Test
       %q{alias :foo bar},
       %q{~~~~~ keyword
         |      ~~~~ expression (sym/1)
+        |      ^ begin (sym/1)
         |           ~~~ expression (sym/2)
+        |           ! begin (sym/2)
         |~~~~~~~~~~~~~~ expression})
   end
 
@@ -3044,10 +3047,10 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:int, 1),
-        s(:hash,
+        s(:kwargs,
           s(:pair, s(:sym, :bar), s(:objc_varargs, s(:int, 2), s(:int, 3), s(:nil))))),
       %q{fun(1, bar: 2, 3, nil)},
-      %q{            ~~~~~~~~~ expression (hash.pair.objc_varargs)},
+      %q{            ~~~~~~~~~ expression (kwargs.pair.objc_varargs)},
       %w(mac))
   end
 
@@ -3103,7 +3106,19 @@ class TestParser < Minitest::Test
     assert_diagnoses(
       [:warning, :ambiguous_literal],
       %q{m /foo/},
-      %q{  ^ location})
+      %q{  ^ location},
+      ALL_VERSIONS - SINCE_3_0)
+
+    refute_diagnoses(
+      %q{m %[1]})
+  end
+
+  def test_send_plain_cmd_ambiguous_regexp
+    assert_diagnoses(
+      [:warning, :ambiguous_regexp],
+      %q{m /foo/},
+      %q{  ^ location},
+      SINCE_3_0)
 
     refute_diagnoses(
       %q{m %[1]})
@@ -3886,7 +3901,8 @@ class TestParser < Minitest::Test
       SINCE_1_9)
   end
 
-  def test_args_assocs
+  def test_args_assocs_legacy
+    Parser::Builders::Default.emit_kwargs = false
     assert_parses(
       s(:send, nil, :fun,
         s(:hash, s(:pair, s(:sym, :foo), s(:int, 1)))),
@@ -3897,6 +3913,91 @@ class TestParser < Minitest::Test
         s(:hash, s(:pair, s(:sym, :foo), s(:int, 1))),
         s(:block_pass, s(:lvar, :baz))),
       %q{fun(:foo => 1, &baz)})
+
+    assert_parses(
+      s(:index,
+      s(:self),
+      s(:hash,
+        s(:pair,
+          s(:sym, :bar),
+          s(:int, 1)))),
+      %q{self[:bar => 1]})
+
+    assert_parses(
+      s(:send,
+        s(:self), :[]=,
+        s(:lvar, :foo),
+        s(:hash,
+          s(:pair,
+            s(:sym, :a),
+            s(:int, 1)))),
+      %q{self.[]= foo, :a => 1})
+
+    assert_parses(
+      s(:yield,
+        s(:hash,
+          s(:pair,
+            s(:sym, :foo),
+            s(:int, 42)))),
+      %q{yield(:foo => 42)})
+
+    assert_parses(
+      s(:super,
+        s(:hash,
+          s(:pair,
+            s(:sym, :foo),
+            s(:int, 42)))),
+      %q{super(:foo => 42)})
+  ensure
+    Parser::Builders::Default.emit_kwargs = true
+  end
+
+  def test_args_assocs
+    assert_parses(
+      s(:send, nil, :fun,
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1)))),
+      %q{fun(:foo => 1)})
+
+    assert_parses(
+      s(:send, nil, :fun,
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1))),
+        s(:block_pass, s(:lvar, :baz))),
+      %q{fun(:foo => 1, &baz)})
+
+    assert_parses(
+      s(:index,
+      s(:self),
+      s(:kwargs,
+        s(:pair,
+          s(:sym, :bar),
+          s(:int, 1)))),
+      %q{self[:bar => 1]})
+
+    assert_parses(
+      s(:send,
+        s(:self), :[]=,
+        s(:lvar, :foo),
+        s(:kwargs,
+          s(:pair,
+            s(:sym, :a),
+            s(:int, 1)))),
+      %q{self.[]= foo, :a => 1})
+
+    assert_parses(
+      s(:yield,
+        s(:kwargs,
+          s(:pair,
+            s(:sym, :foo),
+            s(:int, 42)))),
+      %q{yield(:foo => 42)})
+
+    assert_parses(
+      s(:super,
+        s(:kwargs,
+          s(:pair,
+            s(:sym, :foo),
+            s(:int, 42)))),
+      %q{super(:foo => 42)})
   end
 
   def test_args_assocs_star
@@ -3921,7 +4022,7 @@ class TestParser < Minitest::Test
   def test_args_assocs_comma
     assert_parses(
       s(:index, s(:lvar, :foo),
-        s(:hash, s(:pair, s(:sym, :baz), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :baz), s(:int, 1)))),
       %q{foo[:baz => 1,]},
       %q{},
       SINCE_1_9)
@@ -3931,13 +4032,13 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1)))),
       %q{fun(foo, :foo => 1)})
 
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1))),
         s(:block_pass, s(:lvar, :baz))),
       %q{fun(foo, :foo => 1, &baz)})
   end
@@ -3946,7 +4047,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:index, s(:lvar, :foo),
         s(:lvar, :bar),
-        s(:hash, s(:pair, s(:sym, :baz), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :baz), s(:int, 1)))),
       %q{foo[bar, :baz => 1,]},
       %q{},
       SINCE_1_9)
@@ -4128,14 +4229,14 @@ class TestParser < Minitest::Test
   def test_space_args_assocs
     assert_parses(
       s(:send, nil, :fun,
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1)))),
       %q{fun (:foo => 1)},
       %q{},
       %w(1.8))
 
     assert_parses(
       s(:send, nil, :fun,
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1))),
         s(:block_pass, s(:lvar, :baz))),
       %q{fun (:foo => 1, &baz)},
       %q{},
@@ -4165,7 +4266,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1)))),
       %q{fun (foo, :foo => 1)},
       %q{},
       %w(1.8))
@@ -4173,7 +4274,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1))),
         s(:block_pass, s(:lvar, :baz))),
       %q{fun (foo, :foo => 1, &baz)},
       %q{},
@@ -4182,7 +4283,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo), s(:int, 1),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1)))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1)))),
       %q{fun (foo, 1, :foo => 1)},
       %q{},
       %w(1.8))
@@ -4190,7 +4291,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:send, nil, :fun,
         s(:lvar, :foo), s(:int, 1),
-        s(:hash, s(:pair, s(:sym, :foo), s(:int, 1))),
+        s(:kwargs, s(:pair, s(:sym, :foo), s(:int, 1))),
         s(:block_pass, s(:lvar, :baz))),
       %q{fun (foo, 1, :foo => 1, &baz)},
       %q{},
@@ -5360,8 +5461,7 @@ class TestParser < Minitest::Test
 
   def test_crlf_line_endings
     with_versions(ALL_VERSIONS) do |_ver, parser|
-      source_file = Parser::Source::Buffer.new('(comments)')
-      source_file.source = "\r\nfoo"
+      source_file = Parser::Source::Buffer.new('(comments)', source: "\r\nfoo")
 
       range = lambda do |from, to|
         Parser::Source::Range.new(source_file, from, to)
@@ -5408,7 +5508,7 @@ class TestParser < Minitest::Test
 
     assert_parses(
       s(:send, nil, :assert,
-        s(:hash,
+        s(:kwargs,
           s(:pair, s(:sym, :do), s(:true)))),
       %q{assert do: true},
       %q{},
@@ -5416,7 +5516,7 @@ class TestParser < Minitest::Test
 
     assert_parses(
       s(:send, nil, :f,
-        s(:hash,
+        s(:kwargs,
           s(:pair,
             s(:sym, :x),
             s(:block,
@@ -5434,8 +5534,7 @@ class TestParser < Minitest::Test
     with_versions(ALL_VERSIONS) do |_ver, parser|
       parser.builder.emit_file_line_as_literals = false
 
-      source_file = Parser::Source::Buffer.new('(comments)')
-      source_file.source = "[__FILE__, __LINE__]"
+      source_file = Parser::Source::Buffer.new('(comments)', source: "[__FILE__, __LINE__]")
 
       ast = parser.parse(source_file)
 
@@ -5519,8 +5618,7 @@ class TestParser < Minitest::Test
 
   def assert_parses_with_comments(ast_pattern, source, comments_pattern)
     with_versions(ALL_VERSIONS) do |_ver, parser|
-      source_file = Parser::Source::Buffer.new('(comments)')
-      source_file.source = source
+      source_file = Parser::Source::Buffer.new('(comments)', source: source)
 
       comments_pattern_here = comments_pattern.map do |(from, to)|
         range = Parser::Source::Range.new(source_file, from, to)
@@ -5551,8 +5649,8 @@ class TestParser < Minitest::Test
 
   def test_tokenize
     with_versions(ALL_VERSIONS) do |_ver, parser|
-      source_file = Parser::Source::Buffer.new('(tokenize)')
-      source_file.source = "1 + # foo\n 2"
+      source_file = Parser::Source::Buffer.new('(tokenize)',
+        source: "1 + # foo\n 2")
 
       range = lambda do |from, to|
         Parser::Source::Range.new(source_file, from, to)
@@ -5578,8 +5676,8 @@ class TestParser < Minitest::Test
 
   def test_tokenize_recover
     with_versions(ALL_VERSIONS) do |_ver, parser|
-      source_file = Parser::Source::Buffer.new('(tokenize)')
-      source_file.source = "1 + # foo\n "
+      source_file = Parser::Source::Buffer.new('(tokenize)',
+        source: "1 + # foo\n ")
 
       range = lambda do |from, to|
         Parser::Source::Range.new(source_file, from, to)
@@ -5846,7 +5944,7 @@ class TestParser < Minitest::Test
             s(:lambda),
             s(:args),
             s(:sym, :hello)),
-          s(:hash,
+          s(:kwargs,
             s(:pair, s(:sym, :a), s(:int, 1)))),
         s(:args),
         nil),
@@ -5948,7 +6046,7 @@ class TestParser < Minitest::Test
         s(:lvasgn, :a,
           s(:int, 1)),
         s(:send, nil, :a,
-          s(:hash,
+          s(:kwargs,
             s(:pair,
               s(:sym, :b),
               s(:int, 1))))),
@@ -6554,39 +6652,64 @@ class TestParser < Minitest::Test
 
   def test_context_class
     [
-      %q{class A;},
-      %q{class A < B;}
+      %q{class A; get_context; end},
+      %q{class A < B; get_context; end}
     ].each do |code|
       assert_context([:class], code, ALL_VERSIONS)
     end
   end
 
+  def test_context_module
+    assert_context(
+      [:module],
+      %q{module M; get_context; end},
+      ALL_VERSIONS)
+  end
+
   def test_context_sclass
     assert_context(
       [:sclass],
-      %q{class << foo;},
+      %q{class << foo; get_context; end},
       ALL_VERSIONS)
   end
 
   def test_context_def
-    assert_context(
-      [:def],
-      %q{def m;},
-      ALL_VERSIONS)
+    [
+      %q{def m; get_context; end},
+      %q{def m(a = get_context); end}
+    ].each do |code|
+      assert_context([:def], code, ALL_VERSIONS)
+    end
+
+    [
+      %q{def m() = get_context},
+      %q{def m(a = get_context) = 42}
+    ].each do |code|
+      assert_context([:def], code, SINCE_3_0)
+    end
   end
 
   def test_context_defs
-    assert_context(
-      [:defs],
-      %q{def foo.m;},
-      ALL_VERSIONS)
+    [
+      %q{def foo.m; get_context; end},
+      %q{def foo.m(a = get_context); end}
+    ].each do |code|
+      assert_context([:defs], code, ALL_VERSIONS)
+    end
+
+    [
+      %q{def foo.m() = get_context},
+      %q{def foo.m(a = get_context) = 42}
+    ].each do |code|
+      assert_context([:defs], code, SINCE_3_0)
+    end
   end
 
   def test_context_cmd_brace_block
     [
-      'tap foo {',
-      'foo.tap foo {',
-      'foo::tap foo {'
+      'tap foo { get_context }',
+      'foo.tap foo { get_context }',
+      'foo::tap foo { get_context }'
     ].each do |code|
       assert_context([:block], code, ALL_VERSIONS)
     end
@@ -6594,12 +6717,12 @@ class TestParser < Minitest::Test
 
   def test_context_brace_block
     [
-      'tap {',
-      'foo.tap {',
-      'foo::tap {',
-      'tap do',
-      'foo.tap do',
-      'foo::tap do'
+      'tap { get_context }',
+      'foo.tap { get_context }',
+      'foo::tap { get_context }',
+      'tap do get_context end',
+      'foo.tap do get_context end',
+      'foo::tap do get_context end'
     ].each do |code|
       assert_context([:block], code, ALL_VERSIONS)
     end
@@ -6607,9 +6730,9 @@ class TestParser < Minitest::Test
 
   def test_context_do_block
     [
-      %q{tap 1 do},
-      %q{foo.tap do},
-      %q{foo::tap do}
+      %q{tap 1 do get_context end},
+      %q{foo.tap do get_context end},
+      %q{foo::tap do get_context end}
     ].each do |code|
       assert_context([:block], code, ALL_VERSIONS)
     end
@@ -6617,8 +6740,12 @@ class TestParser < Minitest::Test
 
   def test_context_lambda
     [
-      '->() {',
-      '->() do'
+      '->() { get_context }',
+      '->() do get_context end',
+      '-> { get_context }',
+      '-> do get_context end',
+      '->(a = get_context) {}',
+      '->(a = get_context) do end'
     ].each do |code|
       assert_context([:lambda], code, SINCE_1_9)
     end
@@ -6626,23 +6753,16 @@ class TestParser < Minitest::Test
 
   def test_context_nested
     assert_context(
-      [:class, :sclass, :defs, :def, :block],
-      %q{class A; class << foo; def bar.m; def m; tap do},
-      ALL_VERSIONS)
-
-    assert_context(
-      [:class, :sclass, :defs, :def, :lambda, :block],
-      %q{class A; class << foo; def bar.m; def m; -> do; tap do},
-      SINCE_1_9)
-
-    assert_context(
-      [],
+      [:class, :module, :sclass, :defs, :def, :block],
       %q{
         class A
-          class << foo
-            def bar.m
-              def m
-                tap do
+          module M
+            class << foo
+              def bar.m
+                def m
+                  tap do
+                    get_context
+                  end
                 end
               end
             end
@@ -6652,13 +6772,34 @@ class TestParser < Minitest::Test
       ALL_VERSIONS)
 
     assert_context(
+      [:class, :module, :sclass, :defs, :def, :lambda, :block],
+      %q{
+        class A
+          module M
+            class << foo
+              def bar.m
+                def m
+                  -> do
+                    tap do
+                      get_context
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+      },
+      SINCE_1_9)
+
+    assert_context(
       [],
       %q{
         class A
-          class << foo
-            def bar.m
-              def m
-                -> do
+          module M
+            class << foo
+              def bar.m
+                def m
                   tap do
                   end
                 end
@@ -6666,6 +6807,28 @@ class TestParser < Minitest::Test
             end
           end
         end
+        get_context
+      },
+      ALL_VERSIONS)
+
+    assert_context(
+      [],
+      %q{
+        class A
+          module M
+            class << foo
+              def bar.m
+                def m
+                  -> do
+                    tap do
+                    end
+                  end
+                end
+              end
+            end
+          end
+        end
+        get_context
       },
       SINCE_1_9)
   end
@@ -6922,7 +7085,7 @@ class TestParser < Minitest::Test
         [:error, :unexpected_token, { :token => 'tLCURLY' }]
       ],
       %q{m /foo/ {}},
-      SINCE_2_4)
+      %w(2.4 2.5 2.6 2.7))
 
     assert_diagnoses_many(
       [
@@ -6930,7 +7093,7 @@ class TestParser < Minitest::Test
         [:error, :unexpected_token, { :token => 'tLCURLY' }]
       ],
       %q{m /foo/x {}},
-      SINCE_2_4)
+      %w(2.4 2.5 2.6 2.7))
   end
 
   def test_bug_447
@@ -7178,7 +7341,7 @@ class TestParser < Minitest::Test
     assert_parses(
       s(:block,
         s(:send, nil, :m1,
-          s(:hash,
+          s(:kwargs,
             s(:pair,
               s(:sym, :k),
               s(:send, nil, :m2)))),
@@ -7449,7 +7612,7 @@ class TestParser < Minitest::Test
           s(:nil))),
       %q{proc {_1 = nil}},
       %q{},
-      SINCE_2_7)
+      %w(2.7))
 
     assert_diagnoses(
       [:error, :cant_assign_to_numparam, { :name => '_1' }],
@@ -7477,7 +7640,7 @@ class TestParser < Minitest::Test
 
     refute_diagnoses(
       %q{proc { _1 = nil; _1}},
-      SINCE_2_7)
+      %w(2.7))
   end
 
   def test_numparams_in_nested_blocks
@@ -7749,7 +7912,8 @@ class TestParser < Minitest::Test
     end
   end
 
-  def test_forward_args
+  def test_forward_args_legacy
+    Parser::Builders::Default.emit_forward_arg = false
     assert_parses(
       s(:def, :foo,
         s(:forward_args),
@@ -7781,7 +7945,27 @@ class TestParser < Minitest::Test
       %q{def foo(...); end},
       %q{},
       SINCE_2_7)
+  ensure
+    Parser::Builders::Default.emit_forward_arg = true
+  end
 
+  def test_forward_arg
+    assert_parses(
+      s(:def, :foo,
+        s(:args,
+          s(:forward_arg)),
+        s(:send, nil, :bar,
+          s(:forwarded_args))),
+      %q{def foo(...); bar(...); end},
+      %q{       ~ begin (args)
+        |       ~~~~~ expression (args)
+        |           ~ end (args)
+        |        ~~~ expression (args.forward_arg)
+        |                  ~~~ expression (send.forwarded_args)},
+      SINCE_2_7)
+  end
+
+  def test_forward_args_invalid
     assert_diagnoses(
       [:error, :block_and_blockarg],
       %q{def foo(...) bar(...) { }; end},
@@ -7809,6 +7993,12 @@ class TestParser < Minitest::Test
 
     assert_diagnoses(
       [:error, :unexpected_token, { :token => 'tBDOT3' }],
+      %q{def foo(x,y,z); bar(x, y, z, ...); end},
+      %q{                             ^^^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tBDOT3' }],
       %q{def foo(x,y,z); super(...); end},
       %q{                      ^^^ location},
       SINCE_2_7)
@@ -7823,7 +8013,13 @@ class TestParser < Minitest::Test
       [:error, :unexpected_token, { :token => 'tBDOT3' }],
       %q{->(...) {}},
       %q{   ^^^ location},
-      SINCE_2_7)
+      ['2.7'])
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tDOT3' }],
+      %q{->(...) {}},
+      %q{   ^^^ location},
+      SINCE_3_0)
 
     # Here and below the parser asssumes that
     # it can be a beginningless range, so the error comes after reducing right paren
@@ -7875,6 +8071,26 @@ class TestParser < Minitest::Test
       %q{        ^^^ location},
       SINCE_2_7)
   end
+
+  def test_trailing_forward_arg
+    assert_parses(
+      s(:def, :foo,
+        s(:args,
+          s(:arg, :a),
+          s(:arg, :b),
+          s(:forward_arg)),
+        s(:send, nil, :bar,
+          s(:lvar, :a),
+          s(:int, 42),
+          s(:forwarded_args))),
+      %q{def foo(a, b, ...); bar(a, 42, ...); end},
+      %q{       ~ begin (args)
+        |       ~~~~~~~~~~~ expression (args)
+        |                 ~ end (args)
+        |              ~~~ expression (args.forward_arg)},
+      SINCE_3_0)
+  end
+
 
   def test_erange_without_parentheses_at_eol
     assert_diagnoses(
@@ -8345,7 +8561,7 @@ class TestParser < Minitest::Test
         nil),
       "#{case_pre}#{code}; end",
       source_maps,
-      SINCE_2_7
+      versions
     )
   end
 
@@ -8795,6 +9011,21 @@ class TestParser < Minitest::Test
       s(:in_pattern,
         s(:hash_pattern,
           s(:pair,
+             s(:sym, :Foo),
+             s(:int, 42))), nil,
+        s(:false)),
+      %q{
+        in {Foo: 42
+        }
+          false
+      },
+      %q{}
+    )
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:hash_pattern,
+          s(:pair,
             s(:sym, :a),
             s(:hash_pattern,
               s(:match_var, :b))),
@@ -8932,6 +9163,22 @@ class TestParser < Minitest::Test
       [:error, :pm_interp_in_var_name],
       %q{case a; in "#{a}": 1; end},
       %q{           ~~~~~~~ location},
+      SINCE_2_7
+    )
+
+    assert_diagnoses(
+      [:error, :pm_interp_in_var_name],
+      %q{case a; in "#{a}": 1; end},
+      %q{           ~~~~~~~ location},
+      SINCE_2_7
+    )
+  end
+
+  def test_pattern_matching_invalid_lvar_name
+    assert_diagnoses(
+      [:error, :lvar_name, { name: :a? }],
+      %q{case a; in a?:; end},
+      %q{           ~~ location},
       SINCE_2_7
     )
   end
@@ -9211,8 +9458,7 @@ class TestParser < Minitest::Test
     code = "case 1; #{match_code}; then [#{lvar_names.join(', ')}]; end"
 
     with_versions(versions) do |version, parser|
-      source_file = Parser::Source::Buffer.new('(assert_context)')
-      source_file.source = code
+      source_file = Parser::Source::Buffer.new('(assert_context)', source: code)
 
       lvar_names.each do |lvar_name|
         refute parser.static_env.declared?(lvar_name),
@@ -9222,7 +9468,7 @@ class TestParser < Minitest::Test
       before = parser.static_env.instance_variable_get(:@variables).to_a
 
       begin
-        parsed_ast = parser.parse(source_file)
+        _parsed_ast = parser.parse(source_file)
       rescue Parser::SyntaxError => exc
         backtrace = exc.backtrace
         Exception.instance_method(:initialize).bind(exc).
@@ -9313,7 +9559,7 @@ class TestParser < Minitest::Test
     )
   end
 
-  def test_pattern_matching_single_line
+  def test_pattern_matching_single_line__27
     assert_parses(
       s(:begin,
         s(:in_match,
@@ -9324,13 +9570,31 @@ class TestParser < Minitest::Test
       %q{1 in [a]; a},
       %q{~~~~~~~~ expression (in_match)
         |  ~~ operator (in_match)},
-      SINCE_2_7)
+      %w(2.7))
+  end
+
+  def test_pattern_matching_single_line
+    assert_parses(
+      s(:begin,
+        s(:in_match,
+          s(:int, 1),
+          s(:array_pattern,
+            s(:match_var, :a))),
+        s(:lvar, :a)),
+      %q{1 => [a]; a},
+      %q{~~~~~~~~ expression (in_match)
+        |  ~~ operator (in_match)},
+      SINCE_3_0)
   end
 
   def test_ruby_bug_pattern_matching_restore_in_kwarg_flag
     refute_diagnoses(
       "p(({} in {a:}), a:\n 1)",
-      SINCE_2_7)
+      %w(2.7))
+
+    refute_diagnoses(
+      "p(({} => {a:}), a:\n 1)",
+      SINCE_3_0)
   end
 
   def test_pattern_matching_duplicate_variable_name
@@ -9360,7 +9624,13 @@ class TestParser < Minitest::Test
       [:error, :duplicate_variable_name, { :name => 'a' }],
       %q{0 in [a, a]},
       %q{         ^ location},
-      SINCE_2_7)
+      %w(2.7))
+
+    assert_diagnoses(
+      [:error, :duplicate_variable_name, { :name => 'a' }],
+      %q{0 => [a, a]},
+      %q{         ^ location},
+      SINCE_3_0)
   end
 
   def test_pattern_matching_duplicate_hash_keys
@@ -9400,13 +9670,25 @@ class TestParser < Minitest::Test
       [:error, :unexpected_token, { :token => 'tCOMMA' }],
       %{1 in a, b},
       %{      ^ location},
-      SINCE_2_7)
+      %w(2.7))
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tCOMMA' }],
+      %{1 => a, b},
+      %{      ^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tASSOC' }],
+      %{1 => a:},
+      %{  ^^ location},
+      %w(2.7))
 
     assert_diagnoses(
       [:error, :unexpected_token, { :token => 'tLABEL' }],
-      %{1 in a:},
+      %{1 => a:},
       %{     ^^ location},
-      SINCE_2_7)
+      SINCE_3_0)
   end
 
   def test_pattern_matching_required_bound_variable_before_pin
@@ -9427,5 +9709,416 @@ class TestParser < Minitest::Test
       '-> (arg={}) {}',
       %{},
       SINCE_1_9)
+  end
+
+  def test_endless_method
+    assert_parses(
+      s(:def, :foo,
+        s(:args),
+        s(:int, 42)),
+      %q{def foo() = 42},
+      %q{~~~ keyword
+        |    ~~~ name
+        |          ^ assignment
+        |! end
+        |~~~~~~~~~~~~~~ expression},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:def, :inc,
+        s(:args, s(:arg, :x)),
+        s(:send,
+          s(:lvar, :x), :+,
+          s(:int, 1))),
+      %q{def inc(x) = x + 1},
+      %q{~~~ keyword
+        |    ~~~ name
+        |           ^ assignment
+        |~~~~~~~~~~~~~~~~~~ expression},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:defs, s(:send, nil, :obj), :foo,
+        s(:args),
+        s(:int, 42)),
+      %q{def obj.foo() = 42},
+      %q{~~~ keyword
+        |       ^ operator
+        |        ~~~ name
+        |              ^ assignment
+        |~~~~~~~~~~~~~~~~~~ expression},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:defs, s(:send, nil, :obj), :inc,
+        s(:args, s(:arg, :x)),
+        s(:send,
+          s(:lvar, :x), :+,
+          s(:int, 1))),
+      %q{def obj.inc(x) = x + 1},
+      %q{~~~ keyword
+        |        ~~~ name
+        |       ^ operator
+        |               ^ assignment
+        |~~~~~~~~~~~~~~~~~~~~~~ expression},
+      SINCE_3_0)
+  end
+
+  def test_endless_method_forwarded_args_legacy
+    Parser::Builders::Default.emit_forward_arg = false
+    assert_parses(
+      s(:def, :foo,
+        s(:forward_args),
+        s(:send, nil, :bar,
+          s(:forwarded_args))),
+      %q{def foo(...) = bar(...)},
+      %q{~~~ keyword
+        |    ~~~ name
+        |             ^ assignment
+        |~~~~~~~~~~~~~~~~~~~~~~~ expression},
+      SINCE_3_0)
+    Parser::Builders::Default.emit_forward_arg = true
+  end
+
+  def test_endless_method_with_rescue_mod
+    assert_parses(
+      s(:def, :m,
+        s(:args),
+        s(:rescue,
+          s(:int, 1),
+          s(:resbody, nil, nil,
+            s(:int, 2)), nil)),
+      %q{def m() = 1 rescue 2},
+      %q{},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:defs,
+        s(:self), :m,
+        s(:args),
+        s(:rescue,
+          s(:int, 1),
+          s(:resbody, nil, nil,
+            s(:int, 2)), nil)),
+      %q{def self.m() = 1 rescue 2},
+      %q{},
+      SINCE_3_0)
+  end
+
+  def test_rasgn_line_continuation
+    assert_diagnoses(
+      [:error, :unexpected_token, { :token => 'tASSOC' }],
+      %Q{13.divmod(5)\n=> a,b; [a, b]},
+      %{             ^^ location},
+      SINCE_3_0)
+  end
+
+  def test_find_pattern
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:find_pattern,
+          s(:match_rest,
+            s(:match_var, :x)),
+          s(:match_as,
+            s(:int, 1),
+            s(:match_var, :a)),
+          s(:match_rest,
+            s(:match_var, :y))),
+        nil,
+        s(:true)),
+      %q{in [*x, 1 => a, *y] then true},
+      %q{   ~~~~~~~~~~~~~~~~ expression (in_pattern.find_pattern)
+        |   ~ begin (in_pattern.find_pattern)
+        |                  ~ end (in_pattern.find_pattern)
+        |    ~~ expression (in_pattern.find_pattern.match_rest/1)
+        |                ~~ expression (in_pattern.find_pattern.match_rest/2)},
+      SINCE_3_0)
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :String),
+          s(:find_pattern,
+            s(:match_rest),
+            s(:int, 1),
+            s(:match_rest))),
+        nil,
+        s(:true)),
+      %q{in String(*, 1, *) then true},
+      %q{          ~~~~~~~ expression (in_pattern.const_pattern.find_pattern)},
+      SINCE_3_0)
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:const_pattern,
+          s(:const, nil, :Array),
+          s(:find_pattern,
+            s(:match_rest),
+            s(:int, 1),
+            s(:match_rest))),
+        nil,
+        s(:true)),
+      %q{in Array[*, 1, *] then true},
+      %q{         ~~~~~~~ expression (in_pattern.const_pattern.find_pattern)},
+      SINCE_3_0)
+
+    assert_parses_pattern_match(
+      s(:in_pattern,
+        s(:find_pattern,
+          s(:match_rest),
+          s(:int, 42),
+          s(:match_rest)),
+        nil,
+        s(:true)),
+      %q{in *, 42, * then true},
+      %q{   ~~~~~~~~ expression (in_pattern.find_pattern)},
+      SINCE_3_0)
+  end
+
+  def test_invalid_source
+    with_versions(ALL_VERSIONS) do |_ver, parser|
+      source_file = Parser::Source::Buffer.new('(comments)', source: "def foo; en")
+
+      parser.diagnostics.all_errors_are_fatal = false
+      ast = parser.parse(source_file)
+      assert_nil(ast)
+    end
+  end
+
+  def test_reserved_for_numparam__before_30
+    assert_parses(
+      s(:block,
+        s(:send, nil, :proc),
+        s(:args),
+        s(:lvasgn, :_1,
+          s(:nil))),
+      %q{proc {_1 = nil}},
+      %q{},
+      ALL_VERSIONS - SINCE_3_0)
+
+    assert_parses(
+      s(:lvasgn, :_2,
+        s(:int, 1)),
+      %q{_2 = 1},
+      %q{},
+      ALL_VERSIONS - SINCE_3_0)
+
+    assert_parses(
+      s(:block,
+        s(:send, nil, :proc),
+        s(:args,
+          s(:procarg0,
+            s(:arg, :_3))), nil),
+      %q{proc {|_3|}},
+      %q{},
+      SINCE_1_9 - SINCE_3_0)
+
+    assert_parses(
+      s(:def, :x,
+        s(:args,
+          s(:arg, :_4)), nil),
+      %q{def x(_4) end},
+      %q{},
+      ALL_VERSIONS - SINCE_3_0)
+
+    assert_parses(
+      s(:def, :_5,
+        s(:args), nil),
+      %q{def _5; end},
+      %q{},
+      ALL_VERSIONS - SINCE_3_0)
+
+    assert_parses(
+      s(:defs,
+        s(:self), :_6,
+        s(:args), nil),
+      %q{def self._6; end},
+      %q{},
+      ALL_VERSIONS - SINCE_3_0)
+  end
+
+  def test_reserved_for_numparam__since_30
+    # Regular assignments:
+
+    assert_diagnoses(
+      [:error, :reserved_for_numparam, { :name => '_1' }],
+      %q{proc {_1 = nil}},
+      %q{      ^^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :reserved_for_numparam, { :name => '_2' }],
+      %q{_2 = 1},
+      %q{^^ location},
+      SINCE_3_0)
+
+    # Arguments:
+
+    [
+      # req (procarg0)
+      [
+        %q{proc {|_3|}},
+        %q{       ^^ location},
+      ],
+
+      # req
+      [
+        %q{proc {|_3,|}},
+        %q{       ^^ location},
+      ],
+
+      # opt
+      [
+        %q{proc {|_3 = 42|}},
+        %q{       ^^ location},
+      ],
+
+      # mlhs
+      [
+        %q{proc {|(_3)|}},
+        %q{        ^^ location},
+      ],
+
+      # rest
+      [
+        %q{proc {|*_3|}},
+        %q{        ^^ location},
+      ],
+
+      # kwarg
+      [
+        %q{proc {|_3:|}},
+        %q{       ^^^ location},
+      ],
+
+      # kwoptarg
+      [
+        %q{proc {|_3: 42|}},
+        %q{       ^^^ location},
+      ],
+
+      # kwrestarg
+      [
+        %q{proc {|**_3|}},
+        %q{         ^^ location},
+      ],
+
+      # block
+      [
+        %q{proc {|&_3|}},
+        %q{        ^^ location},
+      ],
+
+      # shadowarg
+      [
+        %q{proc {|;_3|}},
+        %q{        ^^ location},
+      ],
+    ].each do |(code, location)|
+      assert_diagnoses(
+        [:error, :reserved_for_numparam, { :name => '_3' }],
+        code,
+        location,
+        SINCE_3_0)
+    end
+
+    # Method definitions:
+
+    [
+      # regular method
+      [
+        %q{def _5; end},
+        %q{    ^^ location}
+      ],
+      # regular singleton method
+      [
+        %q{def self._5; end},
+        %q{         ^^ location}
+      ],
+      # endless method
+      [
+        %q{def _5() = nil},
+        %q{    ^^ location}
+      ],
+      # endless singleton method
+      [
+        %q{def self._5() = nil},
+        %q{         ^^ location}
+      ],
+    ].each do |(code, location)|
+      assert_diagnoses(
+        [:error, :reserved_for_numparam, { :name => '_5' }],
+        code,
+        location,
+        SINCE_3_0)
+    end
+  end
+
+  def test_endless_setter
+    assert_diagnoses(
+      [:error, :endless_setter],
+      %q{def foo=() = 42},
+      %q{    ^^^^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :endless_setter],
+      %q{def obj.foo=() = 42},
+      %q{        ^^^^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :endless_setter],
+      %q{def foo=() = 42 rescue nil},
+      %q{    ^^^^ location},
+      SINCE_3_0)
+
+    assert_diagnoses(
+      [:error, :endless_setter],
+      %q{def obj.foo=() = 42 rescue nil},
+      %q{        ^^^^ location},
+      SINCE_3_0)
+  end
+
+  def test_endless_method_without_args
+    assert_parses(
+      s(:def, :foo,
+        s(:args),
+        s(:int, 42)),
+      %q{def foo = 42},
+      %q{},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:def, :foo,
+        s(:args),
+        s(:rescue,
+          s(:int, 42),
+          s(:resbody, nil, nil,
+            s(:nil)), nil)),
+      %q{def foo = 42 rescue nil},
+      %q{},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:defs,
+        s(:self), :foo,
+        s(:args),
+        s(:int, 42)),
+      %q{def self.foo = 42},
+      %q{},
+      SINCE_3_0)
+
+    assert_parses(
+      s(:defs,
+        s(:self), :foo,
+        s(:args),
+        s(:rescue,
+          s(:int, 42),
+          s(:resbody, nil, nil,
+            s(:nil)), nil)),
+      %q{def self.foo = 42 rescue nil},
+      %q{},
+      SINCE_3_0)
   end
 end

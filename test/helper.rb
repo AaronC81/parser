@@ -1,8 +1,6 @@
 # frozen_string_literal: true
 
 require 'tempfile'
-require 'minitest/test'
-
 require 'simplecov'
 
 if ENV.include?('COVERAGE') && SimpleCov.usable?
@@ -20,7 +18,7 @@ if ENV.include?('COVERAGE') && SimpleCov.usable?
       ruby25.y
       ruby26.y
       ruby27.y
-      ruby28.y
+      ruby30.y
     ),
     File.expand_path('../../lib/parser', __FILE__))
 
@@ -28,9 +26,9 @@ if ENV.include?('COVERAGE') && SimpleCov.usable?
   at_exit { RaccCoverage.stop }
 
   SimpleCov.start do
-    self.formatter = SimpleCov::Formatter::MultiFormatter[
-      SimpleCov::Formatter::HTMLFormatter,
-    ]
+    self.formatter = SimpleCov::Formatter::MultiFormatter.new(
+      SimpleCov::Formatter::HTMLFormatter
+    )
 
     add_group 'Grammars' do |source_file|
       source_file.filename =~ %r{\.y$}
@@ -53,9 +51,53 @@ require 'minitest/autorun'
 $LOAD_PATH.unshift(File.expand_path('../../lib', __FILE__))
 require 'parser'
 
+module NodeCollector
+  extend self
+  attr_accessor :callbacks, :nodes
+  self.callbacks = []
+  self.nodes = []
+
+  def check
+    @callbacks.each do |callback|
+      @nodes.each { |node| callback.call(node) }
+    end
+    puts "#{callbacks.size} additional tests on #{nodes.size} nodes ran successfully"
+  end
+
+  Minitest.after_run { check }
+end
+
+def for_each_node(&block)
+  NodeCollector.callbacks << block
+end
+
 class Parser::AST::Node
   def initialize(type, *)
-    raise "Type #{type} missing from Parser::Meta::NODE_TYPES" unless Parser::Meta::NODE_TYPES.include?(type)
+    NodeCollector.nodes << self
     super
   end
+end
+
+# Special test extension that records a context of the parser
+# for any node that is created
+module NodeContextExt
+  module NodeExt
+    attr_reader :context
+
+    def assign_properties(properties)
+      super
+
+      if (context = properties[:context])
+        @context = context
+      end
+    end
+  end
+  Parser::AST::Node.prepend(NodeExt)
+
+  module BuilderExt
+    def n(type, children, source_map)
+      super.updated(nil, nil, context: @parser.context.stack.dup)
+    end
+  end
+  Parser::Builders::Default.prepend(BuilderExt)
 end

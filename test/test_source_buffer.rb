@@ -20,6 +20,9 @@ class TestSourceBuffer < Minitest::Test
 
     buffer = Parser::Source::Buffer.new('(string)', 5)
     assert_equal 5, buffer.first_line
+
+    buffer = Parser::Source::Buffer.new('(string)', source: '2+2')
+    assert_equal '2+2', buffer.source
   end
 
   def test_source_setter
@@ -45,7 +48,7 @@ class TestSourceBuffer < Minitest::Test
       ].join("\n")
     end
 
-    assert_match /invalid byte sequence in UTF\-8/, error.message
+    assert_match(/invalid byte sequence in UTF\-8/, error.message)
   end
 
   def test_read
@@ -73,6 +76,8 @@ class TestSourceBuffer < Minitest::Test
     assert_equal [1, 1], @buffer.decompose_position(1)
     assert_equal [2, 0], @buffer.decompose_position(2)
     assert_equal [3, 1], @buffer.decompose_position(7)
+    assert_equal [3, 36], @buffer.decompose_position(42)
+    assert_equal [0, -52], @buffer.decompose_position(-42)
   end
 
   def test_decompose_position_mapped
@@ -159,4 +164,19 @@ class TestSourceBuffer < Minitest::Test
     @buffer.source = "foo\nbar"
     assert_equal ['foo', 'bar'], @buffer.source_lines
   end
+
+  def test_freeze
+    @buffer.source = "1\nfoo\nbar\n"
+    @buffer.freeze
+    @buffer.source_lines
+    @buffer.source_range
+    assert_equal 'foo', @buffer.line_range(2).source
+  end
+
+  def test_ractor
+    @buffer.source = "hello\n:world\nstrange\nodd"
+    ::Ractor.make_shareable(@buffer)
+    assert ::Ractor.shareable?(@buffer)
+    assert_equal ':world', @buffer.line_range(2).source
+  end if defined?(::Ractor)
 end

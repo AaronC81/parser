@@ -1,4 +1,4 @@
-class Parser::Ruby28
+class Parser::Ruby30
 
 token kCLASS kMODULE kDEF kUNDEF kBEGIN kRESCUE kENSURE kEND kIF kUNLESS
       kTHEN kELSIF kELSE kCASE kWHEN kWHILE kUNTIL kFOR kBREAK kNEXT
@@ -208,6 +208,7 @@ rule
                     }
                 | expr
 
+
     command_asgn: lhs tEQL command_rhs
                     {
                       result = @builder.assign(val[0], val[1], val[2])
@@ -283,7 +284,7 @@ rule
                     {
                       result = @builder.not_op(val[0], nil, val[1], nil)
                     }
-                | arg kIN
+                | arg tASSOC
                     {
                       @lexer.state = :expr_beg
                       @lexer.command_start = false
@@ -309,6 +310,35 @@ rule
                       @lexer.cond.pop
                       result = [ val[1], val[2] ]
                     }
+
+        def_name:  fname
+                    {
+                      @static_env.extend_static
+                      @lexer.cmdarg.push(false)
+                      @lexer.cond.push(false)
+                      @current_arg_stack.push(nil)
+
+                      result = val[0]
+                    }
+
+       defn_head: kDEF def_name
+                    {
+                      @context.push(:def)
+
+                      result = [ val[0], val[1] ]
+                    }
+
+       defs_head: kDEF singleton dot_or_colon
+                    {
+                      @lexer.state = :expr_fname
+                    }
+                  def_name
+                    {
+                      @context.push(:defs)
+
+                      result = [ val[0], val[1], val[2], val[4] ]
+                    }
+
 
     command_call: command
                 | block_command
@@ -600,7 +630,7 @@ rule
 
            fitem: fname
                     {
-                      result = @builder.symbol(val[0])
+                      result = @builder.symbol_internal(val[0])
                     }
                 | symbol
 
@@ -817,6 +847,74 @@ rule
                       result = @builder.ternary(val[0], val[1],
                                                 val[2], val[4], val[5])
                     }
+                | defn_head f_opt_paren_args tEQL arg
+                    {
+                      _def_t, name_t = val[0]
+                      endless_method_name(name_t)
+
+                      result = @builder.def_endless_method(*val[0],
+                                 val[1], val[2], val[3])
+
+                      @lexer.cmdarg.pop
+                      @lexer.cond.pop
+                      @static_env.unextend
+                      @context.pop
+                      @current_arg_stack.pop
+                    }
+                | defn_head f_opt_paren_args tEQL arg kRESCUE_MOD arg
+                    {
+                      _def_t, name_t = val[0]
+                      endless_method_name(name_t)
+
+                      rescue_body = @builder.rescue_body(val[4],
+                                        nil, nil, nil,
+                                        nil, val[5])
+
+                      method_body = @builder.begin_body(val[3], [ rescue_body ])
+
+                      result = @builder.def_endless_method(*val[0],
+                                 val[1], val[2], method_body)
+
+                      @lexer.cmdarg.pop
+                      @lexer.cond.pop
+                      @static_env.unextend
+                      @context.pop
+                      @current_arg_stack.pop
+                    }
+                | defs_head f_opt_paren_args tEQL arg
+                    {
+                      _def_t, _recv, _dot_t, name_t = val[0]
+                      endless_method_name(name_t)
+
+                      result = @builder.def_endless_singleton(*val[0],
+                                 val[1], val[2], val[3])
+
+                      @lexer.cmdarg.pop
+                      @lexer.cond.pop
+                      @static_env.unextend
+                      @context.pop
+                      @current_arg_stack.pop
+                    }
+                | defs_head f_opt_paren_args tEQL arg kRESCUE_MOD arg
+                    {
+                      _def_t, _recv, _dot_t, name_t = val[0]
+                      endless_method_name(name_t)
+
+                      rescue_body = @builder.rescue_body(val[4],
+                                        nil, nil, nil,
+                                        nil, val[5])
+
+                      method_body = @builder.begin_body(val[3], [ rescue_body ])
+
+                      result = @builder.def_endless_singleton(*val[0],
+                                 val[1], val[2], method_body)
+
+                      @lexer.cmdarg.pop
+                      @lexer.cond.pop
+                      @static_env.unextend
+                      @context.pop
+                      @current_arg_stack.pop
+                    }
                 | primary
 
            relop: tGT | tLT | tGEQ | tLEQ
@@ -856,6 +954,14 @@ rule
       paren_args: tLPAREN2 opt_call_args rparen
                     {
                       result = val
+                    }
+                | tLPAREN2 args tCOMMA args_forward rparen
+                    {
+                      unless @static_env.declared_forward_args?
+                        diagnostic :error, :unexpected_token, { :token => 'tBDOT3' } , val[3]
+                      end
+
+                      result = [val[0], [*val[1], @builder.forwarded_args(val[3])], val[4]]
                     }
                 | tLPAREN2 args_forward rparen
                     {
@@ -1109,14 +1215,7 @@ rule
                       result      = @builder.block(val[0],
                                       begin_t, args, body, end_t)
                     }
-                | tLAMBDA lambda
-                    {
-                      lambda_call = @builder.call_lambda(val[0])
-
-                      args, (begin_t, body, end_t) = val[1]
-                      result      = @builder.block(lambda_call,
-                                      begin_t, args, body, end_t)
-                    }
+                | lambda
                 | kIF expr_value then compstmt if_tail kEND
                     {
                       else_t, else_ = val[4]
@@ -1211,6 +1310,7 @@ rule
                     {
                       @static_env.extend_static
                       @lexer.cmdarg.push(false)
+                      @context.push(:module)
                     }
                     bodystmt kEND
                     {
@@ -1223,19 +1323,12 @@ rule
 
                       @lexer.cmdarg.pop
                       @static_env.unextend
+                      @context.pop
                     }
-                | kDEF fname
+                | defn_head f_arglist bodystmt kEND
                     {
-                      @static_env.extend_static
-                      @lexer.cmdarg.push(false)
-                      @lexer.cond.push(false)
-                      @context.push(:def)
-                      @current_arg_stack.push(nil)
-                    }
-                    f_arglist bodystmt kEND
-                    {
-                      result = @builder.def_method(val[0], val[1],
-                                  val[3], val[4], val[5])
+                      result = @builder.def_method(*val[0], val[1],
+                                  val[2], val[3])
 
                       @lexer.cmdarg.pop
                       @lexer.cond.pop
@@ -1243,22 +1336,10 @@ rule
                       @context.pop
                       @current_arg_stack.pop
                     }
-                | kDEF singleton dot_or_colon
+                | defs_head f_arglist bodystmt kEND
                     {
-                      @lexer.state = :expr_fname
-                    }
-                    fname
-                    {
-                      @static_env.extend_static
-                      @lexer.cmdarg.push(false)
-                      @lexer.cond.push(false)
-                      @context.push(:defs)
-                      @current_arg_stack.push(nil)
-                    }
-                    f_arglist bodystmt kEND
-                    {
-                      result = @builder.def_singleton(val[0], val[1], val[2],
-                                  val[4], val[6], val[7], val[8])
+                      result = @builder.def_singleton(*val[0], val[1],
+                                  val[2], val[3])
 
                       @lexer.cmdarg.pop
                       @lexer.cond.pop
@@ -1370,6 +1451,9 @@ rule
                       result = @builder.restarg(val[0])
                     }
 
+    f_any_kwrest: f_kwrest
+                | f_no_kwarg
+
  block_args_tail: f_block_kwarg tCOMMA f_kwrest opt_f_block_arg
                     {
                       result = val[0].concat(val[2]).concat(val[3])
@@ -1378,11 +1462,7 @@ rule
                     {
                       result = val[0].concat(val[1])
                     }
-                | f_kwrest opt_f_block_arg
-                    {
-                      result = val[0].concat(val[1])
-                    }
-                | f_no_kwarg opt_f_block_arg
+                | f_any_kwrest opt_f_block_arg
                     {
                       result = val[0].concat(val[1])
                     }
@@ -1400,6 +1480,8 @@ opt_block_args_tail:
                     {
                       result = []
                     }
+
+  excessed_comma: tCOMMA
 
      block_param: f_arg tCOMMA f_block_optarg tCOMMA f_rest_arg              opt_block_args_tail
                     {
@@ -1435,7 +1517,7 @@ opt_block_args_tail:
                                   concat(val[2]).
                                   concat(val[3])
                     }
-                | f_arg tCOMMA
+                | f_arg excessed_comma
                 | f_arg tCOMMA                       f_rest_arg tCOMMA f_arg opt_block_args_tail
                     {
                       result = val[0].
@@ -1535,7 +1617,8 @@ opt_block_args_tail:
                     }
                 | f_bad_arg
 
-          lambda:   {
+          lambda: tLAMBDA
+                    {
                       @static_env.extend_dynamic
                       @max_numparam_stack.push
                       @context.push(:lambda)
@@ -1547,12 +1630,16 @@ opt_block_args_tail:
                     }
                   lambda_body
                     {
-                      args = @max_numparam_stack.has_numparams? ? @builder.numargs(@max_numparam_stack.top) : val[1]
-                      result = [ args, val[3] ]
+                      lambda_call = @builder.call_lambda(val[0])
+                      args = @max_numparam_stack.has_numparams? ? @builder.numargs(@max_numparam_stack.top) : val[2]
+                      begin_t, body, end_t = val[4]
 
                       @max_numparam_stack.pop
                       @static_env.unextend
                       @lexer.cmdarg.pop
+
+                      result      = @builder.block(lambda_call,
+                                      begin_t, args, body, end_t)
                     }
 
      f_larglist: tLPAREN2 f_args opt_bv_decl tRPAREN
@@ -1791,6 +1878,10 @@ opt_block_args_tail:
                     {
                       result = @builder.array_pattern(nil, [val[0]].concat(val[2]), nil)
                     }
+                | p_find
+                    {
+                      result = @builder.find_pattern(nil, val[0], nil)
+                    }
                 | p_args_tail
                     {
                       result = @builder.array_pattern(nil, val[0], nil)
@@ -1833,6 +1924,12 @@ opt_block_args_tail:
                       pattern = @builder.array_pattern(nil, val[2], nil)
                       result = @builder.const_pattern(val[0], val[1], pattern, val[3])
                     }
+                | p_const p_lparen p_find rparen
+                    {
+                      @pattern_hash_keys.pop
+                      pattern = @builder.find_pattern(nil, val[2], nil)
+                      result = @builder.const_pattern(val[0], val[1], pattern, val[3])
+                    }
                 | p_const p_lparen p_kwargs rparen
                     {
                       @pattern_hash_keys.pop
@@ -1850,6 +1947,12 @@ opt_block_args_tail:
                       pattern = @builder.array_pattern(nil, val[2], nil)
                       result = @builder.const_pattern(val[0], val[1], pattern, val[3])
                     }
+                | p_const p_lbracket p_find rbracket
+                    {
+                      @pattern_hash_keys.pop
+                      pattern = @builder.find_pattern(nil, val[2], nil)
+                      result = @builder.const_pattern(val[0], val[1], pattern, val[3])
+                    }
                 | p_const p_lbracket p_kwargs rbracket
                     {
                       @pattern_hash_keys.pop
@@ -1861,14 +1964,13 @@ opt_block_args_tail:
                       pattern = @builder.array_pattern(val[1], nil, val[2])
                       result = @builder.const_pattern(val[0], val[1], pattern, val[2])
                     }
-                | tLBRACK
+                | tLBRACK p_args rbracket
                     {
-                      @pattern_hash_keys.push
+                      result = @builder.array_pattern(val[0], val[1], val[2])
                     }
-                  p_args rbracket
+                | tLBRACK p_find rbracket
                     {
-                      @pattern_hash_keys.pop
-                      result = @builder.array_pattern(val[0], val[2], val[3])
+                      result = @builder.find_pattern(val[0], val[1], val[2])
                     }
                 | tLBRACK rbracket
                     {
@@ -1949,25 +2051,27 @@ opt_block_args_tail:
                       result = [ *val[0], last_item ]
                     }
 
-     p_args_tail: tSTAR tIDENTIFIER
+     p_args_tail: p_rest
                     {
-                      match_rest = @builder.match_rest(val[0], val[1])
-                      result = [ match_rest ]
+                      result = [ val[0] ]
                     }
-                | tSTAR tIDENTIFIER tCOMMA p_args_post
+                | p_rest tCOMMA p_args_post
                     {
-                      match_rest = @builder.match_rest(val[0], val[1])
-                      result = [ match_rest, *val[3] ]
+                      result = [ val[0], *val[2] ]
+                    }
+
+          p_find: p_rest tCOMMA p_args_post tCOMMA p_rest
+                    {
+                      result = [ val[0], *val[2], val[4] ]
+                    }
+
+          p_rest: tSTAR tIDENTIFIER
+                    {
+                      result = @builder.match_rest(val[0], val[1])
                     }
                 | tSTAR
                     {
-                      match_rest = @builder.match_rest(val[0])
-                      result = [ match_rest ]
-                    }
-                | tSTAR tCOMMA p_args_post
-                    {
-                      match_rest = @builder.match_rest(val[0])
-                      result = [ match_rest, *val[2] ]
+                      result = @builder.match_rest(val[0])
                     }
 
      p_args_post: p_arg
@@ -1981,7 +2085,7 @@ opt_block_args_tail:
 
            p_arg: p_expr
 
-        p_kwargs: p_kwarg tCOMMA p_kwrest
+        p_kwargs: p_kwarg tCOMMA p_any_kwrest
                     {
                       result = [ *val[0], *val[2] ]
                     }
@@ -1993,17 +2097,9 @@ opt_block_args_tail:
                     {
                       result = val[0]
                     }
-                | p_kwrest
+                | p_any_kwrest
                     {
                       result = val[0]
-                    }
-                | p_kwarg tCOMMA p_kwnorest
-                    {
-                      result = [ *val[0], *val[2] ]
-                    }
-                | p_kwnorest
-                    {
-                      result = [ *val[0], *val[2] ]
                     }
 
          p_kwarg: p_kw
@@ -2026,7 +2122,6 @@ opt_block_args_tail:
 
       p_kw_label: tLABEL
                   {
-                    check_kwarg_name(val[0])
                     result = [:label, val[0]]
                   }
                 | tSTRING_BEG string_contents tLABEL_END
@@ -2047,6 +2142,9 @@ opt_block_args_tail:
                     {
                       result = [ @builder.match_nil_pattern(val[0], val[1]) ]
                     }
+
+    p_any_kwrest: p_kwrest
+                | p_kwnorest
 
          p_value: p_primitive
                 | p_primitive tDOT2 p_primitive
@@ -2089,14 +2187,7 @@ opt_block_args_tail:
                     {
                       result = @builder.accessible(val[0])
                     }
-                | tLAMBDA lambda
-                    {
-                      lambda_call = @builder.call_lambda(val[0])
-
-                      args, (begin_t, body, end_t) = val[1]
-                      result      = @builder.block(lambda_call,
-                                      begin_t, args, body, end_t)
-                    }
+                | lambda
 
       p_variable: tIDENTIFIER
                     {
@@ -2515,19 +2606,34 @@ keyword_variable: kNIL
                       result = nil
                     }
 
-       f_arglist: tLPAREN2 f_args rparen
+f_opt_paren_args: f_paren_args
+                | none
+                    {
+                      result = @builder.args(nil, [], nil)
+                    }
+
+   f_paren_args: tLPAREN2 f_args rparen
                     {
                       result = @builder.args(val[0], val[1], val[2])
 
                       @lexer.state = :expr_value
                     }
+                | tLPAREN2 f_arg tCOMMA args_forward rparen
+                    {
+                      args = [ *val[1], @builder.forward_arg(val[3]) ]
+                      result = @builder.args(val[0], args, val[4])
+
+                      @static_env.declare_forward_args
+                    }
                 | tLPAREN2 args_forward rparen
                     {
-                      result = @builder.forward_args(val[0], val[1], val[2])
+                      result = @builder.forward_only_args(val[0], val[1], val[2])
                       @static_env.declare_forward_args
 
                       @lexer.state = :expr_value
                     }
+
+       f_arglist: f_paren_args
                 |   {
                       result = @lexer.in_kwarg
                       @lexer.in_kwarg = true
@@ -2546,11 +2652,7 @@ keyword_variable: kNIL
                     {
                       result = val[0].concat(val[1])
                     }
-                | f_kwrest opt_f_block_arg
-                    {
-                      result = val[0].concat(val[1])
-                    }
-                | f_no_kwarg opt_f_block_arg
+                | f_any_kwrest opt_f_block_arg
                     {
                       result = val[0].concat(val[1])
                     }
@@ -2933,9 +3035,15 @@ require 'parser'
 ---- inner
 
   def version
-    28
+    30
   end
 
   def default_encoding
     Encoding::UTF_8
+  end
+
+  def endless_method_name(name_t)
+    if name_t[0].end_with?('=')
+      diagnostic :error, :endless_setter, nil, name_t
+    end
   end

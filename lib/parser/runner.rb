@@ -14,9 +14,8 @@ module Parser
     end
 
     def initialize
-      Parser::Builders::Default.modernize
-
       @option_parser = OptionParser.new { |opts| setup_option_parsing(opts) }
+      @legacy = {}
       @parser_class  = nil
       @parser        = nil
       @files         = []
@@ -30,12 +29,15 @@ module Parser
 
     def execute(options)
       parse_options(options)
+      setup_builder_default
       prepare_parser
 
       process_all_input
     end
 
     private
+
+    LEGACY_MODES = %i[lambda procarg0 encoding index arg_inside_procarg0 forward_arg kwargs].freeze
 
     def runner_name
       raise NotImplementedError, "implement #{self.class}##{__callee__}"
@@ -111,9 +113,9 @@ module Parser
         @parser_class = Parser::Ruby27
       end
 
-      opts.on '--28', 'Parse as Ruby 2.8 would' do
-        require 'parser/ruby28'
-        @parser_class = Parser::Ruby28
+      opts.on '--30', 'Parse as Ruby 3.0 would' do
+        require 'parser/ruby30'
+        @parser_class = Parser::Ruby30
       end
 
       opts.on '--mac', 'Parse as MacRuby 0.12 would' do
@@ -124,6 +126,17 @@ module Parser
       opts.on '--ios', 'Parse as mid-2015 RubyMotion would' do
         require 'parser/rubymotion'
         @parser_class = Parser::RubyMotion
+      end
+
+      opts.on '--legacy', "Parse with all legacy modes" do
+        @legacy = Hash.new(true)
+      end
+
+      LEGACY_MODES.each do |mode|
+        opt_name = "--legacy-#{mode.to_s.gsub('_', '-')}"
+        opts.on opt_name, "Parse with legacy mode for emit_#{mode}" do
+          @legacy[mode] = true
+        end
       end
 
       opts.on '-w', '--warnings', 'Enable warnings' do |w|
@@ -161,6 +174,12 @@ module Parser
       if @parser_class.nil?
         require 'parser/current'
         @parser_class = Parser::CurrentRuby
+      end
+    end
+
+    def setup_builder_default
+      LEGACY_MODES.each do |mode|
+        Parser::Builders::Default.send(:"emit_#{mode}=", !@legacy[mode])
       end
     end
 

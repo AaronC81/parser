@@ -1,6 +1,74 @@
 Changelog
 =========
 
+v2.7.2.0 (2020-10-06)
+---------------------
+
+API modifications:
+ * Bump 2.7 branch to 2.7.2 (#748) (Koichi ITO)
+
+v2.7.1.5 (2020-09-24)
+---------------------
+
+API modifications:
+ * right assignment: use existing AST node types (#738) (#739) (Marc-André Lafortune)
+ * ruby28.y -> ruby30.y (#729) (Vladimir Dementyev)
+
+Features implemented:
+ * Optimize Range#column_range (#741) (Marc-André Lafortune)
+ * ruby30.y: reject endless setter. (#736) (Ilya Bylich)
+ * ruby28.y: reject assignment to numparam. (#725) (Ilya Bylich)
+ * emit "endless method def" as `:def` node. (#716) (Ilya Bylich)
+
+Bugs fixed:
+ * rename 2.8 to 3.0 everywhere (#732) (Ilya Bylich)
+ * test_current.rb: 2.8 -> 3.0 (#731) (Vladimir Dementyev)
+ * Parser#parse returns nil instead of false if error is thrown (#722) (Marc-André Lafortune)
+ * unify locations for normal and endless method definition (#718) (Marc-André Lafortune)
+ * ruby27.y: accept const names as hash keys for pattern matching (#717) (Koichi ITO)
+ * Fix locations for alias / undef nodes with internal symbols (#715) (Marc-André Lafortune)
+
+v2.7.1.4 (2020-06-19)
+---------------------
+
+Features implemented:
+ * ruby28.y: add find pattern. (#714) (Ilya Bylich)
+ * lexer.rl: reject `->...` and `->(...)` with the same error. (#713) (Ilya Bylich)
+ * ruby28.y: accept leading args before forward arg. (#712) (Ilya Bylich)
+ * Added `emit_forward_arg` compatibility flag. (#710) (Ilya Bylich)
+ * ruby28.y: include entire lambda expr in lambda rule. (#708) (Ilya Bylich)
+ * ruby28.y: extracted excessed_comma rule. (#706) (Ilya Bylich)
+ * Source::TreeRewriter: Improved merging and representations (#703) (Marc-André Lafortune)
+
+Bugs fixed:
+ * ruby*.y: fixed context inside lambda args and module. (#709) (Ilya Bylich)
+
+v2.7.1.3 (2020-05-26)
+---------------------
+
+API modifications:
+ * fixed all warnings. tests are running in verbose mode now. (#685) (Ilya Bylich)
+
+Features implemented:
+ * ruby-[parse, rewrite]: add legacy switches (#699) (Marc-André Lafortune)
+ * Added Parser::Source::Range#to_range. (#697) (Ilya Bylich)
+ * ruby28.y: support rescue modifier in endless method definition. (#696) (Ilya Bylich)
+ * ruby28.y: unify kwrest and no-kwrest rules. (#694) (Ilya Bylich)
+ * ruby28.y: add right hand assignment (#682) (Vladimir Dementyev)
+
+Bugs fixed:
+ * fix Comment.associate for postfix conditions/loops (#688) (Marc-André Lafortune)
+
+v2.7.1.2 (2020-04-30)
+---------------------
+
+Features implemented:
+ * ruby28.y: endless method definition (#676) (Vladimir Dementyev)
+ * ruby28.y: branch parser (#677) (Vladimir Dementyev)
+
+Bugs fixed:
+ * ruby27.y: reject invalid lvar in pattern matching (#680) (Vladimir Dementyev)
+
 v2.7.1.1 (2020-04-15)
 ---------------------
 
@@ -1072,3 +1140,4 @@ Bugs fixed:
  * lexer.rl: /= at expr_beg. (Peter Zotov)
  * lexer.rl: class\<\<self. (Peter Zotov)
  * fix lexing comments at expr_beg "{#1\n}". (Peter Zotov)
+

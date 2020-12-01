@@ -37,9 +37,8 @@ class TestLexer < Minitest::Test
   end
 
   def assert_escape(expected, input)
-    source_buffer = Parser::Source::Buffer.new('(assert_escape)')
-
-    source_buffer.source = "\"\\#{input}\"".encode(input.encoding)
+    source_buffer = Parser::Source::Buffer.new('(assert_escape)',
+      source: "\"\\#{input}\"".encode(input.encoding))
 
     @lex.reset
     @lex.source_buffer = source_buffer
@@ -71,8 +70,7 @@ class TestLexer < Minitest::Test
   end
 
   def assert_scanned(input, *args)
-    source_buffer = Parser::Source::Buffer.new('(assert_scanned)')
-    source_buffer.source = input
+    source_buffer = Parser::Source::Buffer.new('(assert_scanned)', source: input)
 
     @lex.reset(false)
     @lex.source_buffer = source_buffer
@@ -3569,14 +3567,25 @@ class TestLexer < Minitest::Test
                    :tIDENTIFIER, 're', [1, 3])
   end
 
+  def test_endless_method
+    setup_lexer(30)
+
+    assert_scanned('def foo() = 42',
+                    :kDEF, "def", [0, 3],
+                    :tIDENTIFIER, "foo", [4, 7],
+                    :tLPAREN2, "(", [7, 8],
+                    :tRPAREN, ")", [8, 9],
+                    :tEQL, "=", [10, 11],
+                    :tINTEGER, 42, [12, 14])
+  end
+
   def lex_numbered_parameter(input)
     @lex.max_numparam_stack.push
 
     @lex.context = Parser::Context.new
     @lex.context.push(:block)
 
-    source_buffer = Parser::Source::Buffer.new('(assert_lex_numbered_parameter)')
-    source_buffer.source = input
+    source_buffer = Parser::Source::Buffer.new('(assert_lex_numbered_parameter)', source: input)
 
     @lex.source_buffer = source_buffer
 
@@ -3594,7 +3603,7 @@ class TestLexer < Minitest::Test
 
   def refute_scanned_numbered_parameter(input, message = nil)
     err = assert_raises Parser::SyntaxError do
-      lex_token, (lex_value, lex_range) = lex_numbered_parameter(input)
+      _lex_token, (_lex_value, _lex_range) = lex_numbered_parameter(input)
     end
 
     if message

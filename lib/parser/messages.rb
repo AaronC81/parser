@@ -35,6 +35,7 @@ module Parser
     # Lexer warnings
     :invalid_escape_use      => 'invalid character syntax; use ?%{escape}',
     :ambiguous_literal       => 'ambiguous first argument; put parentheses or a space even after the operator',
+    :ambiguous_regexp        => "ambiguity between regexp and two divisions: wrap regexp in parentheses or add a space after `/' operator",
     :ambiguous_prefix        => "`%{prefix}' interpreted as argument prefix",
     :triple_dot_at_eol       => '... at EOL, should be parenthesized',
 
@@ -65,6 +66,7 @@ module Parser
     :invalid_return               => 'Invalid return in class/module body',
     :csend_in_lhs_of_masgn        => '&. inside multiple assignment destination',
     :cant_assign_to_numparam      => 'cannot assign to numbered parameter %{name}',
+    :reserved_for_numparam        => '%{name} is reserved for numbered parameter',
     :ordinary_param_defined       => 'ordinary parameter is defined',
     :numparam_used_in_outer_scope => 'numbered parameter is already used in an outer scope',
     :circular_argument_reference  => 'circular argument reference %{var_name}',
@@ -73,6 +75,7 @@ module Parser
     :undefined_lvar               => "no such local variable: `%{name}'",
     :duplicate_variable_name      => 'duplicate variable name %{name}',
     :duplicate_pattern_key        => 'duplicate hash pattern key %{name}',
+    :endless_setter               => 'setter method cannot be defined in an endless method definition',
 
     # Parser warnings
     :useless_else            => 'else without rescue is useless',
@@ -93,4 +96,19 @@ module Parser
     :crossing_insertions           => 'the rewriting action on:',
     :crossing_insertions_conflict  => 'is crossing that on:',
   }.freeze
+
+  # @api private
+  module Messages
+    # Formats the message, returns a raw template if there's nothing to interpolate
+    #
+    # Code like `format("", {})` gives a warning, and so this method tries interpolating
+    # only if `arguments` hash is not empty.
+    #
+    # @api private
+    def self.compile(reason, arguments)
+      template = MESSAGES[reason]
+      return template if Hash === arguments && arguments.empty?
+      format(template, arguments)
+    end
+  end
 end

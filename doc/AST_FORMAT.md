@@ -277,6 +277,23 @@ Format:
  ~~~~~~~~~~~~~~~~ expression
 ~~~
 
+### Kwargs
+
+Starting from Ruby 2.7 only implicit hash literals (that are not wrapped into `{ .. }`) are passed as keyword arguments.
+Explicit hash literals are passed as positional arguments.
+This is reflected in AST as `kwargs` node that is emitted only for implicit
+hash literals and only if `emit_kwargs` compatibility flag is enabled.
+
+Note that it can be a part of `send`, `csend`, `index` and `yield` nodes.
+
+Format:
+
+~~~
+(kwargs (pair (int 1) (int 2)) (kwsplat (lvar :bar)) (pair (sym :baz) (int 3)))
+"foo(1 => 2, **bar, baz: 3)"
+     ~~~~~~~~~~~~~~~~~~~~~ expression
+~~~
+
 #### Keyword splat (2.0)
 
 Can also be used in argument lists: `foo(bar, **baz)`
@@ -637,7 +654,7 @@ Format:
 (masgn (mlhs (ivasgn :@a) (cvasgn :@@b)) (array (splat (lvar :c))))
 "@a, @@b = *c"
 
-(masgn (mlhs (mlhs (lvasgn :a) (lvasgn :b)) (lvasgn :c)) (lvar :d))
+(masgn (mlhs (lvasgn :a) (mlhs (lvasgn :b)) (lvasgn :c)) (lvar :d))
 "a, (b, c) = d"
 
 (masgn (mlhs (send (self) :a=) (send (self) :[]= (int 1))) (lvar :a))
@@ -730,6 +747,29 @@ Format:
 
 ~~~
 
+### Right-hand assignment
+
+Format:
+
+~~~
+(lvasgn :a (int 1))
+"1 => a"
+ ~~~~~~ expression
+      ~ name
+   ~~ operator
+~~~
+
+#### Multiple right-hand assignment
+
+Format:
+
+~~~
+(masgn (mlhs (lvasgn :a) (lvasgn :b)) (send (int 13) :divmod (int 5)))
+"13.divmod(5) => a,b"
+ ~~~~~~~~~~~~~~~~~~~ expression
+              ^^ operator
+~~~
+
 ## Class and module definition
 
 ### Module
@@ -800,6 +840,33 @@ Format:
           ~~~ name
                ~~~ end
  ~~~~~~~~~~~~~~~~~ expression
+~~~
+
+### "Endless" method
+
+Format:
+
+~~~
+(def :foo (args) (int 42))
+"def foo() = 42"
+ ~~~ keyword
+     ~~~ name
+           ^ assignment
+ ~~~~~~~~~~~~~~ expression
+~~~
+
+
+### "Endless" singleton method
+
+Format:
+
+~~~
+(defs (self) :foo (args) (int 42))
+"def self.foo() = 42"
+ ~~~ keyword
+          ~~~ name
+                ^ assignment
+ ~~~~~~~~~~~~~~~~~~~ expression
 ~~~
 
 ### Undefinition
@@ -1115,13 +1182,13 @@ s(:numblock,
 
 ## Forward arguments
 
-### Method definition accepting forwarding arguments
+### Method definition accepting only forwarding arguments
 
 Ruby 2.7 introduced a feature called "arguments forwarding".
 When a method takes any arguments for forwarding them in the future
 the whole `args` node gets replaced with `forward-args` node.
 
-Format:
+Format if `emit_forward_arg` compatibility flag is disabled:
 
 ~~~
 (def :foo
@@ -1131,6 +1198,25 @@ Format:
         ~ begin
         ~~~~~ expression
 ~~~
+
+However, Ruby 3.0 added support for leading arguments before `...`, and so
+it can't be used as a replacement of the `(args)` node anymore. To solve it
+`emit_forward_arg` should be enabled.
+
+Format if `emit_forward_arg` compatibility flag is enabled:
+
+~~~
+(def :foo
+  (args
+    (forward-arg)) nil)
+"def foo(...); end"
+        ~ begin (args)
+            ~ end (args)
+        ~~~~~ expression (args)
+         ~~~ expression (forward_arg)
+~~~
+
+Note that the node is called `forward_arg` when emitted separately.
 
 ### Method call taking arguments of the currently forwarding method
 
@@ -2123,6 +2209,24 @@ Format:
       ~~~ name (match-nil-pattern)
 ~~~
 
+### Matching using find pattern
+
+Format:
+
+~~~
+(find-pattern
+  (match-rest
+    (match-var :a))
+  (int 42)
+  (match-rest))
+"in [*, 42, *]"
+    ~ begin
+             ~ end
+    ~~~~~~~~~~ expression
+~~~
+
+Note that it can be used as a top-level pattern only when used in a `case` statement. In that case `begin` and `end` are empty.
+
 ### Matching using const pattern
 
 #### With array pattern
@@ -2177,4 +2281,21 @@ Format:
     ~ name (const-pattern.const)
     ~ expression (const-pattern.const)
      ~~ expression (const-pattern.array_pattern)
+~~~
+
+#### With find pattern
+
+Format:
+
+~~~
+(const-pattern
+  (const nil :X)
+  (find-pattern
+    (match-rest)
+    (int 42)
+    (match-rest)))
+"in X[*, 42, *]"
+     ~ begin
+              ~ end
+    ~~~~~~~~~~~ expression
 ~~~

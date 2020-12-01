@@ -493,7 +493,7 @@ rule
 
             fsym: fname
                     {
-                      result = @builder.symbol(val[0])
+                      result = @builder.symbol_internal(val[0])
                     }
                 | symbol
 
@@ -729,6 +729,9 @@ rule
        arg_value: arg
 
        aref_args: none
+                    {
+                      result = []
+                    }
                 | command opt_nl
                     {
                       result = [ val[0] ]
@@ -1156,6 +1159,7 @@ rule
                 | kMODULE cpath
                     {
                       @static_env.extend_static
+                      @context.push(:module)
                     }
                     bodystmt kEND
                     {
@@ -1167,6 +1171,7 @@ rule
                                                    val[3], val[4])
 
                       @static_env.unextend
+                      @context.pop
                     }
                 | kDEF fname
                     {

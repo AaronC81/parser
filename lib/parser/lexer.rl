@@ -283,6 +283,13 @@ class Parser::Lexer
     %% write exec;
     # %
 
+    # Ragel creates a local variable called `testEof` but it doesn't use
+    # it in any assignment. This dead code is here to swallow the warning.
+    # It has no runtime cost because Ruby doesn't produce any instructions from it.
+    if false
+      testEof
+    end
+
     @p = p
 
     if @token_queue.any?
@@ -1537,7 +1544,11 @@ class Parser::Lexer
       => {
         if tok(tm, tm + 1) == '/'.freeze
           # Ambiguous regexp literal.
-          diagnostic :warning, :ambiguous_literal, nil, range(tm, tm + 1)
+          if @version < 30
+            diagnostic :warning, :ambiguous_literal, nil, range(tm, tm + 1)
+          else
+            diagnostic :warning, :ambiguous_regexp, nil, range(tm, tm + 1)
+          end
         end
 
         p = tm - 1
@@ -2023,7 +2034,14 @@ class Parser::Lexer
 
       '...'
       => {
-        if @version >= 27
+        if @version >= 30
+          if @lambda_stack.any? && @lambda_stack.last + 1 == @paren_nest
+            # To reject `->(...)` like `->...`
+            emit(:tDOT3)
+          else
+            emit(:tBDOT3)
+          end
+        elsif @version >= 27
           emit(:tBDOT3)
         else
           emit(:tDOT3)
@@ -2370,7 +2388,7 @@ class Parser::Lexer
       '*' | '=>'
       => {
         emit_table(PUNCTUATION)
-        fgoto expr_value;
+        fnext expr_value; fbreak;
       };
 
       # When '|', '~', '!', '=>' are used as operators
